@@ -11,6 +11,8 @@ type DownloadFormat = "png" | "jpg" | "jpeg" | "webp";
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp"];
 const DOWNLOAD_FORMATS: DownloadFormat[] = ["png", "jpg", "jpeg", "webp"];
 const GENERATIONS_TABLE = "generation_events";
+const UPLOADS_TABLE = "uploaded_images";
+const BUCKET_NAME = "planritningar";
 
 export function FloorplanConverter() {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -26,6 +28,7 @@ export function FloorplanConverter() {
   const [statusMessage, setStatusMessage] = useState(
     "Processing… (this may take 1–3 minutes)",
   );
+  const [saveMessage, setSaveMessage] = useState("");
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -91,6 +94,7 @@ export function FloorplanConverter() {
     setIsUploading(false);
     setIsDownloadOpen(false);
     setErrorMessage("");
+    setSaveMessage("");
     setLogs([]);
     setStatusMessage("Processing… (this may take 1–3 minutes)");
 
@@ -173,6 +177,7 @@ export function FloorplanConverter() {
       setResultUrl(`/api/floorplan/result/${streamJobId}?t=${Date.now()}`);
       setPhase("done");
       void registerGeneration();
+      void saveConvertedImageToLibrary(streamJobId);
     });
 
     stream.addEventListener("error", (event) => {
@@ -210,6 +215,66 @@ export function FloorplanConverter() {
     }
 
     window.dispatchEvent(new Event("generation-updated"));
+  }
+
+  async function saveConvertedImageToLibrary(doneJobId: string) {
+    setSaveMessage("");
+
+    let resultResponse: Response;
+    try {
+      resultResponse = await fetch(`/api/floorplan/result/${doneJobId}`, {
+        method: "GET",
+        cache: "no-store",
+      });
+    } catch {
+      setErrorMessage(
+        "Konverteringen är klar men bilden kunde inte hämtas för biblioteket.",
+      );
+      return;
+    }
+
+    if (!resultResponse.ok) {
+      setErrorMessage(
+        "Konverteringen är klar men bilden kunde inte sparas i biblioteket.",
+      );
+      return;
+    }
+
+    const imageBlob = await resultResponse.blob();
+    const uniqueName = `${Date.now()}-${crypto.randomUUID()}.png`;
+    const storagePath = `generated/${uniqueName}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from(BUCKET_NAME)
+      .upload(storagePath, imageBlob, {
+        upsert: false,
+        contentType: "image/png",
+      });
+
+    if (uploadError) {
+      setErrorMessage(
+        `Konverteringen är klar men bibliotekssparning misslyckades: ${uploadError.message}`,
+      );
+      return;
+    }
+
+    const { error: insertError } = await supabase.from(UPLOADS_TABLE).insert({
+      file_name: `floorplan_converted_${new Date().toISOString()}.png`,
+      file_path: storagePath,
+      file_size: imageBlob.size,
+      mime_type: "image/png",
+    });
+
+    if (insertError) {
+      await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
+      setErrorMessage(
+        `Konverteringen är klar men metadata kunde inte sparas: ${insertError.message}`,
+      );
+      return;
+    }
+
+    setSaveMessage("Bilden är sparad i Bibliotek.");
+    window.dispatchEvent(new Event("library-updated"));
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -403,6 +468,12 @@ export function FloorplanConverter() {
       {errorMessage ? (
         <div className="mt-4 rounded-none bg-[#fce8e8] px-4 py-3 text-sm leading-relaxed text-[#c0392b]">
           {errorMessage}
+        </div>
+      ) : null}
+
+      {saveMessage ? (
+        <div className="mt-4 rounded-none border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm leading-relaxed text-emerald-700">
+          {saveMessage}
         </div>
       ) : null}
 
