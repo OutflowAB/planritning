@@ -1,11 +1,14 @@
+import { ReactNode } from "react";
+
 import { ToolPlaceholder } from "@/components/dashboard/tool-placeholder";
 
 type SectionPageProps = {
   title: string;
   placeholderText?: string;
+  children?: ReactNode;
 };
 
-export function SectionPage({ title, placeholderText }: SectionPageProps) {
+export function SectionPage({ title, placeholderText, children }: SectionPageProps) {
   void title;
 
   return (
@@ -20,6 +23,7 @@ export function SectionPage({ title, placeholderText }: SectionPageProps) {
             </ToolPlaceholder>
           </div>
         ) : null}
+        {children ? <div className="mt-8 w-full">{children}</div> : null}
       </div>
     </section>
   );

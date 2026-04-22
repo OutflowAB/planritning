@@ -25,16 +25,16 @@ type DashboardShellProps = {
 type SidebarIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
 const sidebarItems = [
-  { label: "Konvertera", href: "/dashboard", icon: Squares2X2Icon },
-  { label: "Verktyg", href: "/dashboard/historik", icon: WrenchScrewdriverIcon },
-  { label: "Bibliotek", href: "/dashboard/bibliotek", icon: BookOpenIcon },
-  { label: "Uppladdningar", href: "/dashboard/uppladdningar", icon: ArrowUpTrayIcon },
-  { label: "Fakturering", href: "/dashboard/fakturering", icon: CreditCardIcon },
+  { label: "Startsida", href: "/startsida", icon: Squares2X2Icon },
+  { label: "Verktyg", href: "/verktyg", icon: WrenchScrewdriverIcon },
+  { label: "Bibliotek", href: "/bibliotek", icon: BookOpenIcon },
+  { label: "Uppladdningar", href: "/uppladdningar", icon: ArrowUpTrayIcon },
+  { label: "Fakturering", href: "/fakturering", icon: CreditCardIcon },
 ] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
 
 const settingsItem = {
   label: "Inställningar",
-  href: "/dashboard/installningar",
+  href: "/installningar",
   icon: Cog6ToothIcon,
 } as const satisfies { label: string; href: string; icon: SidebarIcon };
 
@@ -103,7 +103,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
   }
 
   function isActivePath(href: string) {
-    if (href === "/dashboard") {
+    if (href === "/startsida" || href === "/verktyg" || href === "/installningar") {
       return pathname === href;
     }
 

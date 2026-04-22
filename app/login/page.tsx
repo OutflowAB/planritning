@@ -15,7 +15,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (isAuthenticated()) {
-      router.replace("/dashboard");
+      router.replace("/startsida");
     }
   }, [router]);
 
@@ -41,7 +41,7 @@ export default function LoginPage() {
       }
 
       setAuthenticated(true);
-      router.replace("/dashboard");
+      router.replace("/startsida");
     } catch {
       setError("Ett oväntat fel uppstod. Försök igen.");
       setAuthenticated(false);
