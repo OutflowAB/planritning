@@ -1,46 +1,26 @@
 import { NextResponse } from "next/server";
 
-import { getFloorplanApiUrl } from "@/lib/floorplan-api";
+import { createFloorplanJob } from "@/lib/floorplan-jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  const apiUrl = getFloorplanApiUrl("/upload");
-  if (!apiUrl) {
-    return NextResponse.json(
-      { error: "Konverteringsserverns adress saknas." },
-      { status: 500 },
-    );
-  }
-
   const formData = await request.formData();
-  if (!formData.get("file")) {
+  const file = formData.get("file");
+
+  if (!(file instanceof File)) {
     return NextResponse.json({ error: "No file provided" }, { status: 400 });
   }
 
-  let upstreamResponse: Response;
-  try {
-    upstreamResponse = await fetch(apiUrl, {
-      method: "POST",
-      body: formData,
-      cache: "no-store",
-    });
-  } catch {
+  const allowedMimeTypes = ["image/jpeg", "image/png", "image/webp"];
+  if (!allowedMimeTypes.includes(file.type)) {
     return NextResponse.json(
-      { error: "Kunde inte nå konverteringsservern." },
-      { status: 503 },
+      { error: "Unsupported file type. Please use JPG, PNG, or WebP." },
+      { status: 400 },
     );
   }
 
-  const contentType =
-    upstreamResponse.headers.get("content-type") ?? "application/json";
-  const body = await upstreamResponse.text();
-
-  return new Response(body, {
-    status: upstreamResponse.status,
-    headers: {
-      "content-type": contentType,
-    },
-  });
+  const { jobId } = await createFloorplanJob(file);
+  return NextResponse.json({ job_id: jobId });
 }

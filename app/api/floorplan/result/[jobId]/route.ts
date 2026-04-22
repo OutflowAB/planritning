@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
+import { readFile } from "node:fs/promises";
 
-import { getFloorplanApiUrl } from "@/lib/floorplan-api";
+import { getFloorplanJob } from "@/lib/floorplan-jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,43 +14,33 @@ type RouteContext = {
 
 export async function GET(_request: Request, context: RouteContext) {
   const { jobId } = await context.params;
-  const apiUrl = getFloorplanApiUrl(`/result/${jobId}`);
+  const job = getFloorplanJob(jobId);
+  if (!job) {
+    return NextResponse.json({ error: "Unknown job" }, { status: 404 });
+  }
 
-  if (!apiUrl) {
+  if (job.status === "error") {
     return NextResponse.json(
-      { error: "Konverteringsserverns adress saknas." },
+      { error: job.error ?? "Lokal konvertering misslyckades." },
       { status: 500 },
     );
   }
 
-  let upstreamResponse: Response;
+  if (job.status !== "done") {
+    return NextResponse.json({ error: "Result not ready" }, { status: 404 });
+  }
+
+  let bytes: Buffer;
   try {
-    upstreamResponse = await fetch(apiUrl, {
-      method: "GET",
-      cache: "no-store",
-    });
+    bytes = await readFile(job.outputPath);
   } catch {
-    return NextResponse.json(
-      { error: "Kunde inte nå konverteringsservern." },
-      { status: 503 },
-    );
+    return NextResponse.json({ error: "Result not ready" }, { status: 404 });
   }
 
-  if (!upstreamResponse.ok || !upstreamResponse.body) {
-    const body = await upstreamResponse.text();
-    return new Response(body || "Result not ready", {
-      status: upstreamResponse.status || 500,
-      headers: {
-        "content-type":
-          upstreamResponse.headers.get("content-type") ?? "text/plain",
-      },
-    });
-  }
-
-  return new Response(upstreamResponse.body, {
-    status: upstreamResponse.status,
+  return new Response(bytes, {
+    status: 200,
     headers: {
-      "content-type": upstreamResponse.headers.get("content-type") ?? "image/png",
+      "content-type": "image/png",
       "cache-control": "no-store",
     },
   });

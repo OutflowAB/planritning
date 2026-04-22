@@ -9,7 +9,6 @@ import {
   BookOpenIcon,
   Cog6ToothIcon,
   CreditCardIcon,
-  DocumentTextIcon,
   Squares2X2Icon,
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
@@ -27,11 +26,10 @@ type SidebarIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
 const sidebarItems = [
   { label: "Konvertera", href: "/dashboard", icon: Squares2X2Icon },
+  { label: "Verktyg", href: "/dashboard/historik", icon: WrenchScrewdriverIcon },
   { label: "Bibliotek", href: "/dashboard/bibliotek", icon: BookOpenIcon },
   { label: "Uppladdningar", href: "/dashboard/uppladdningar", icon: ArrowUpTrayIcon },
   { label: "Fakturering", href: "/dashboard/fakturering", icon: CreditCardIcon },
-  { label: "Verktyg", href: "/dashboard/historik", icon: WrenchScrewdriverIcon },
-  { label: "Skapa planritning", href: "/dashboard/rapporter", icon: DocumentTextIcon },
 ] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
 
 const settingsItem = {
@@ -111,7 +109,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
             <button
               type="button"
               onClick={() => setIsSidebarOpen((prev) => !prev)}
-              className="inline-flex items-center justify-center rounded-md px-2 py-1 text-white/90 transition hover:bg-white/10 hover:text-white"
+              className="inline-flex items-center justify-center rounded-none px-2 py-1 text-white/90 transition hover:bg-white/10 hover:text-white"
               aria-label={isSidebarOpen ? "Dölj sidomeny" : "Visa sidomeny"}
             >
               <Bars3Icon className="h-[22px] w-[22px]" />
@@ -131,7 +129,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
             <button
               type="button"
               onClick={handleLogout}
-              className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10"
+              className="inline-flex items-center gap-2 rounded-none px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10"
             >
               <ArrowRightStartOnRectangleIcon className="h-[14px] w-[14px]" aria-hidden="true" />
               Logga ut
@@ -149,7 +147,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
           aria-label="Huvudnavigering"
         >
           <div
-            className={`flex h-full min-w-64 flex-col space-y-3 overflow-y-auto transition-opacity duration-200 ${
+            className={`flex h-full min-w-64 flex-col overflow-y-auto pt-3 transition-opacity duration-200 ${
               isSidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"
             }`}
           >
@@ -157,7 +155,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`inline-flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium transition ${
+                className={`inline-flex w-full items-center gap-2 rounded-none px-3 py-4 text-left text-sm font-medium transition ${
                   pathname === item.href
                     ? "bg-white/20 text-white"
                     : "text-white/85 hover:bg-white/10 hover:text-white"
@@ -170,7 +168,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
 
             <Link
               href={settingsItem.href}
-              className={`mt-auto inline-flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium transition ${
+              className={`mt-auto inline-flex w-full items-center gap-2 rounded-none px-3 py-4 text-left text-sm font-medium transition ${
                 pathname === settingsItem.href
                   ? "bg-white/20 text-white"
                   : "text-white/85 hover:bg-white/10 hover:text-white"

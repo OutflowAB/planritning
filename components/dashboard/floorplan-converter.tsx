@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 import { DragEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { supabase } from "@/lib/supabase";
@@ -13,8 +14,24 @@ const DOWNLOAD_FORMATS: DownloadFormat[] = ["png", "jpg", "jpeg", "webp"];
 const GENERATIONS_TABLE = "generation_events";
 const UPLOADS_TABLE = "uploaded_images";
 const BUCKET_NAME = "planritningar";
+const CONVERTER_STATE_STORAGE_KEY = "floorplan-converter-state-v1";
+
+type PersistedConverterState = {
+  phase: Phase;
+  jobId: string;
+  logs: string[];
+  statusMessage: string;
+  errorMessage: string;
+};
+
+function revokeObjectPreviewUrl(url: string) {
+  if (url.startsWith("blob:")) {
+    URL.revokeObjectURL(url);
+  }
+}
 
 export function FloorplanConverter() {
+  const searchParams = useSearchParams();
   const [phase, setPhase] = useState<Phase>("idle");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState("");
@@ -26,14 +43,15 @@ export function FloorplanConverter() {
   const [errorMessage, setErrorMessage] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const [statusMessage, setStatusMessage] = useState(
-    "Processing… (this may take 1–3 minutes)",
+    "Bearbetar… (vanligtvis 20–90 sekunder)",
   );
-  const [saveMessage, setSaveMessage] = useState("");
 
   const eventSourceRef = useRef<EventSource | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const downloadContainerRef = useRef<HTMLDivElement | null>(null);
   const logsContainerRef = useRef<HTMLDivElement | null>(null);
+  const isHydratedRef = useRef(false);
+  const preloadedPathRef = useRef<string>("");
 
   useEffect(() => {
     return () => {
@@ -41,10 +59,78 @@ export function FloorplanConverter() {
         eventSourceRef.current.close();
       }
       if (previewUrl) {
-        URL.revokeObjectURL(previewUrl);
+        revokeObjectPreviewUrl(previewUrl);
       }
     };
   }, [previewUrl]);
+
+  useEffect(() => {
+    const imagePath = searchParams.get("imagePath");
+    const imagePreviewUrl = searchParams.get("imagePreviewUrl");
+    if (!imagePath || imagePath === preloadedPathRef.current) {
+      return;
+    }
+    preloadedPathRef.current = imagePath;
+
+    if (imagePreviewUrl) {
+      setErrorMessage("");
+      setPreviewUrl(imagePreviewUrl);
+      setPhase("preview");
+    }
+
+    let isCancelled = false;
+
+    async function preloadFileFromLibrary() {
+      let sourceUrl = imagePreviewUrl;
+      if (!sourceUrl) {
+        const { data, error } = await supabase.storage
+          .from(BUCKET_NAME)
+          .createSignedUrl(imagePath, 3600);
+
+        if (isCancelled) {
+          return;
+        }
+
+        if (error || !data?.signedUrl) {
+          setErrorMessage("Kunde inte läsa vald bild från biblioteket.");
+          return;
+        }
+
+        sourceUrl = data.signedUrl;
+      }
+      if (!sourceUrl) {
+        return;
+      }
+
+      let response: Response;
+      try {
+        response = await fetch(sourceUrl, { cache: "force-cache" });
+      } catch {
+        if (!isCancelled) {
+          setErrorMessage("Kunde inte hämta vald bild för konvertering.");
+        }
+        return;
+      }
+
+      if (isCancelled || !response.ok) {
+        return;
+      }
+
+      const blob = await response.blob();
+      const fallbackName = imagePath.split("/").pop() ?? "uppladdad-bild";
+      const fileName = searchParams.get("imageName") || fallbackName;
+      const fileType = blob.type || "image/png";
+      const file = new File([blob], fileName, { type: fileType });
+
+      handleFile(file);
+    }
+
+    void preloadFileFromLibrary();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [searchParams]);
 
   useEffect(() => {
     if (!logsContainerRef.current) {
@@ -52,6 +138,73 @@ export function FloorplanConverter() {
     }
     logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
   }, [logs]);
+
+  useEffect(() => {
+    try {
+      const rawState = window.sessionStorage.getItem(CONVERTER_STATE_STORAGE_KEY);
+      if (!rawState) {
+        return;
+      }
+
+      const persistedState = JSON.parse(rawState) as PersistedConverterState;
+      if (!persistedState?.jobId) {
+        window.sessionStorage.removeItem(CONVERTER_STATE_STORAGE_KEY);
+        return;
+      }
+
+      setJobId(persistedState.jobId);
+      setLogs(Array.isArray(persistedState.logs) ? persistedState.logs : []);
+      setStatusMessage(
+        persistedState.statusMessage || "Bearbetar… (vanligtvis 20–90 sekunder)",
+      );
+      setErrorMessage(persistedState.errorMessage || "");
+
+      if (persistedState.phase === "processing") {
+        setPhase("processing");
+        openStream(persistedState.jobId);
+        return;
+      }
+
+      if (persistedState.phase === "done") {
+        setPhase("done");
+        setResultUrl(`/api/floorplan/result/${persistedState.jobId}?t=${Date.now()}`);
+        return;
+      }
+
+      window.sessionStorage.removeItem(CONVERTER_STATE_STORAGE_KEY);
+    } catch {
+      window.sessionStorage.removeItem(CONVERTER_STATE_STORAGE_KEY);
+    } finally {
+      isHydratedRef.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isHydratedRef.current) {
+      return;
+    }
+
+    try {
+      if (phase !== "processing" && phase !== "done") {
+        window.sessionStorage.removeItem(CONVERTER_STATE_STORAGE_KEY);
+        return;
+      }
+
+      const stateToPersist: PersistedConverterState = {
+        phase,
+        jobId,
+        logs,
+        statusMessage,
+        errorMessage,
+      };
+      window.sessionStorage.setItem(
+        CONVERTER_STATE_STORAGE_KEY,
+        JSON.stringify(stateToPersist),
+      );
+    } catch {
+      // Ignore storage errors to avoid blocking conversion UI.
+    }
+  }, [errorMessage, jobId, logs, phase, statusMessage]);
 
   useEffect(() => {
     function handleOutsideClick(event: MouseEvent) {
@@ -82,8 +235,9 @@ export function FloorplanConverter() {
   function resetAllState() {
     clearActiveStream();
     if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
+      revokeObjectPreviewUrl(previewUrl);
     }
+    window.sessionStorage.removeItem(CONVERTER_STATE_STORAGE_KEY);
 
     setPhase("idle");
     setSelectedFile(null);
@@ -94,9 +248,8 @@ export function FloorplanConverter() {
     setIsUploading(false);
     setIsDownloadOpen(false);
     setErrorMessage("");
-    setSaveMessage("");
     setLogs([]);
-    setStatusMessage("Processing… (this may take 1–3 minutes)");
+    setStatusMessage("Bearbetar… (vanligtvis 20–90 sekunder)");
 
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -106,12 +259,12 @@ export function FloorplanConverter() {
   function handleFile(file: File) {
     setErrorMessage("");
     if (!ALLOWED_TYPES.includes(file.type)) {
-      setErrorMessage("Unsupported file type. Please use JPG, PNG, or WebP.");
+      setErrorMessage("Filtypen stöds inte. Använd JPG, PNG eller WebP.");
       return;
     }
 
     if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
+      revokeObjectPreviewUrl(previewUrl);
     }
 
     setSelectedFile(file);
@@ -138,7 +291,7 @@ export function FloorplanConverter() {
         body: formData,
       });
     } catch {
-      setErrorMessage("Upload failed — kunde inte nå konverteringsservern.");
+      setErrorMessage("Uppladdning misslyckades — kunde inte starta lokal konvertering.");
       setIsUploading(false);
       return;
     }
@@ -149,7 +302,7 @@ export function FloorplanConverter() {
     };
 
     if (!uploadResponse.ok || !uploadPayload.job_id) {
-      setErrorMessage(uploadPayload.error ?? "Upload error");
+      setErrorMessage(uploadPayload.error ?? "Uppladdningsfel");
       setIsUploading(false);
       return;
     }
@@ -187,7 +340,7 @@ export function FloorplanConverter() {
       }
 
       clearActiveStream();
-      setErrorMessage(message || "Processing failed — check server logs.");
+      setErrorMessage(message || "Bearbetningen misslyckades — kontrollera loggen.");
       setPhase("preview");
     });
 
@@ -196,7 +349,7 @@ export function FloorplanConverter() {
         return;
       }
       clearActiveStream();
-      setErrorMessage("Lost connection to server.");
+      setErrorMessage("Förlorade anslutningen till konverteringsflödet.");
       setPhase("preview");
     };
   }
@@ -218,8 +371,6 @@ export function FloorplanConverter() {
   }
 
   async function saveConvertedImageToLibrary(doneJobId: string) {
-    setSaveMessage("");
-
     let resultResponse: Response;
     try {
       resultResponse = await fetch(`/api/floorplan/result/${doneJobId}`, {
@@ -273,7 +424,6 @@ export function FloorplanConverter() {
       return;
     }
 
-    setSaveMessage("Bilden är sparad i Bibliotek.");
     window.dispatchEvent(new Event("library-updated"));
   }
 
@@ -344,7 +494,7 @@ export function FloorplanConverter() {
           {previewUrl ? (
             <Image
               src={previewUrl}
-              alt="Preview"
+              alt="Förhandsvisning"
               width={1200}
               height={900}
               unoptimized
@@ -353,10 +503,10 @@ export function FloorplanConverter() {
           ) : (
             <div>
               <p className="text-[15px] leading-relaxed text-[#7a6a60]">
-                Drag &amp; drop your floor plan here
+                Dra och släpp din planritning här
               </p>
               <p className="text-[15px] leading-relaxed text-[#7a6a60]">
-                or{" "}
+                eller{" "}
                 <button
                   type="button"
                   onClick={(event) => {
@@ -365,7 +515,7 @@ export function FloorplanConverter() {
                   }}
                   className="cursor-pointer bg-transparent p-0 text-[15px] font-semibold text-[#3d3028] underline"
                 >
-                  browse files
+                  bläddra bland filer
                 </button>
               </p>
               <p className="mt-2 text-xs text-[#b0a098]">JPG · PNG · WebP</p>
@@ -378,21 +528,21 @@ export function FloorplanConverter() {
         <div className="mt-5 flex items-center gap-3">
           <button
             type="button"
+            onClick={resetAllState}
+            className="rounded-none px-2 py-3 text-sm text-[#8b7355] underline"
+          >
+            Välj en annan fil
+          </button>
+          <button
+            type="button"
             onClick={() => void handleConvert()}
             disabled={!canConvert}
             className="flex flex-1 items-center justify-center gap-2 rounded-none bg-[#3d3028] px-8 py-3 text-[15px] font-semibold text-white transition hover:bg-[#2a1f18] disabled:cursor-not-allowed disabled:opacity-70"
           >
             {isUploading ? (
-              <span className="h-4 w-4 animate-spin rounded-none border-2 border-white/35 border-t-white" />
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/35 border-t-white" />
             ) : null}
-            <span>{isUploading ? "Uploading…" : "Convert"}</span>
-          </button>
-          <button
-            type="button"
-            onClick={resetAllState}
-            className="rounded-none px-2 py-3 text-sm text-[#8b7355] underline"
-          >
-            Use different file
+            <span>{isUploading ? "Laddar upp…" : "Konvertera"}</span>
           </button>
         </div>
       ) : null}
@@ -400,7 +550,7 @@ export function FloorplanConverter() {
       {phase === "processing" ? (
         <div className="mt-5">
           <div className="mb-3 flex items-center gap-3">
-            <div className="h-7 w-7 animate-spin rounded-none border-[3px] border-[#e1d5c9] border-t-[#3d3028]" />
+            <div className="h-7 w-7 animate-spin rounded-full border-[3px] border-[#e1d5c9] border-t-[#3d3028]" />
             <span className="text-sm font-medium text-[#3d3028]">{statusMessage}</span>
           </div>
           <div className="mb-3 h-1 w-full overflow-hidden rounded-none bg-[#e1d5c9]">
@@ -410,7 +560,7 @@ export function FloorplanConverter() {
             ref={logsContainerRef}
             className="max-h-[200px] overflow-y-auto rounded-none border border-[#e1d5c9] bg-[#faf7f5] px-4 py-3 font-mono text-xs leading-relaxed text-[#7a6a60] whitespace-pre-wrap"
           >
-            {logs.length > 0 ? logs.join("\n") : "Starting conversion pipeline..."}
+            {logs.length > 0 ? logs.join("\n") : "Startar konverteringsflöde..."}
           </div>
         </div>
       ) : null}
@@ -419,7 +569,7 @@ export function FloorplanConverter() {
         <div className="mt-5">
           <Image
             src={resultUrl}
-            alt="Converted floor plan"
+            alt="Konverterad planritning"
             width={1600}
             height={1200}
             unoptimized
@@ -432,7 +582,7 @@ export function FloorplanConverter() {
                 onClick={() => setIsDownloadOpen((previous) => !previous)}
                 className="flex w-full items-center justify-center gap-2 rounded-none bg-[#3d3028] px-6 py-3 text-sm font-semibold text-white transition hover:bg-[#2a1f18]"
               >
-                <span>Download</span>
+                <span>Ladda ner</span>
                 <span
                   className={`h-0 w-0 border-x-4 border-t-4 border-x-transparent border-t-white transition ${
                     isDownloadOpen ? "rotate-180" : ""
@@ -459,7 +609,7 @@ export function FloorplanConverter() {
               onClick={resetAllState}
               className="rounded-none border border-[#c9bdb4] px-4 py-3 text-sm text-[#7a6a60] transition hover:border-[#8b7355] hover:text-[#3d3028]"
             >
-              Convert another
+              Konvertera en till
             </button>
           </div>
         </div>
@@ -468,12 +618,6 @@ export function FloorplanConverter() {
       {errorMessage ? (
         <div className="mt-4 rounded-none bg-[#fce8e8] px-4 py-3 text-sm leading-relaxed text-[#c0392b]">
           {errorMessage}
-        </div>
-      ) : null}
-
-      {saveMessage ? (
-        <div className="mt-4 rounded-none border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm leading-relaxed text-emerald-700">
-          {saveMessage}
         </div>
       ) : null}
 

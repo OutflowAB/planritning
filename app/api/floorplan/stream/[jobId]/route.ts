@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getFloorplanApiUrl } from "@/lib/floorplan-api";
+import { getFloorplanJob, onJobEvent } from "@/lib/floorplan-jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,44 +13,73 @@ type RouteContext = {
 
 export async function GET(_request: Request, context: RouteContext) {
   const { jobId } = await context.params;
-  const apiUrl = getFloorplanApiUrl(`/stream/${jobId}`);
+  const job = getFloorplanJob(jobId);
+  const encoder = new TextEncoder();
 
-  if (!apiUrl) {
-    return NextResponse.json(
-      { error: "Konverteringsserverns adress saknas." },
-      { status: 500 },
-    );
+  if (!job) {
+    return NextResponse.json({ error: "Unknown job" }, { status: 404 });
   }
 
-  let upstreamResponse: Response;
-  try {
-    upstreamResponse = await fetch(apiUrl, {
-      method: "GET",
-      headers: {
-        Accept: "text/event-stream",
-      },
-      cache: "no-store",
-    });
-  } catch {
-    return NextResponse.json(
-      { error: "Kunde inte nå konverteringsservern." },
-      { status: 503 },
-    );
-  }
+  let releaseListener: (() => void) | null = null;
+  let stopHeartbeat: ReturnType<typeof setInterval> | null = null;
 
-  if (!upstreamResponse.ok || !upstreamResponse.body) {
-    const body = await upstreamResponse.text();
-    return new Response(body || "Failed to open event stream.", {
-      status: upstreamResponse.status || 500,
-      headers: {
-        "content-type":
-          upstreamResponse.headers.get("content-type") ?? "text/plain",
-      },
-    });
-  }
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const safeEnqueue = (value: string) => {
+        try {
+          controller.enqueue(encoder.encode(value));
+        } catch {
+          // Stream already closed.
+        }
+      };
 
-  return new Response(upstreamResponse.body, {
-    status: upstreamResponse.status,
+      stopHeartbeat = setInterval(() => {
+        safeEnqueue("event: heartbeat\ndata: ping\n\n");
+      }, 15000);
+
+      const release = onJobEvent(jobId, (event) => {
+        if (event.type === "log") {
+          safeEnqueue(`event: log\ndata: ${event.data}\n\n`);
+        }
+
+        if (event.type === "done") {
+          safeEnqueue(`event: done\ndata: ${event.data}\n\n`);
+          if (stopHeartbeat) {
+            clearInterval(stopHeartbeat);
+          }
+          releaseListener?.();
+          controller.close();
+        }
+
+        if (event.type === "error") {
+          safeEnqueue(`event: error\ndata: ${event.data}\n\n`);
+          if (stopHeartbeat) {
+            clearInterval(stopHeartbeat);
+          }
+          releaseListener?.();
+          controller.close();
+        }
+      });
+      releaseListener = release;
+
+      if (!release) {
+        if (stopHeartbeat) {
+          clearInterval(stopHeartbeat);
+        }
+        safeEnqueue("event: error\ndata: Unknown job\n\n");
+        controller.close();
+      }
+    },
+    cancel() {
+      if (stopHeartbeat) {
+        clearInterval(stopHeartbeat);
+      }
+      releaseListener?.();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
     headers: {
       "content-type": "text/event-stream",
       "cache-control": "no-cache, no-transform",

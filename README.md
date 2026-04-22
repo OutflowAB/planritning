@@ -17,7 +17,11 @@ ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=change-me
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
-FLOORPLAN_API_ORIGIN=http://127.0.0.1:5000
+# Optional: override Python binary used by local converter
+# FLOORPLAN_PYTHON=/absolute/path/to/python
+# Optional performance toggles
+# FLOORPLAN_ENABLE_UPSCALE=false
+# FLOORPLAN_ENABLE_TEXT_REPLACEMENT=true
 ```
 
 3. Starta utvecklingsservern:
@@ -30,17 +34,15 @@ Appen kor pa [http://localhost:3000](http://localhost:3000).
 
 ## Floorplanconvert
 
-Konverteringsverktyget i `floorplanconvert` ar nu inbyggt direkt i `dashboard`-sidan (ingen iframe/widget). Frontenden i Next anropar API-routes under `/api/floorplan/*`.
+Konverteringsverktyget i `floorplanconvert` kors direkt lokalt av Next API-routes under `/api/floorplan/*`. Ingen separat Flask-server behovs.
 
-Starta konverteringsservern i en separat terminal:
+Forutsattningar for lokal konvertering:
 
-```bash
-cd floorplanconvert
-source .venv/bin/activate
-python server.py
-```
-
-Om konverteringsservern kor pa en annan host/port, andra `FLOORPLAN_API_ORIGIN` i `.env.local`.
+- Python 3.10+ installerat
+- Python-dependencies i `floorplanconvert` installerade
+- Valfritt: satt `FLOORPLAN_PYTHON` i `.env.local` om du vill peka pa en specifik Python-binar
+- Prestanda: `FLOORPLAN_ENABLE_UPSCALE=false` ar snabbaste laget (default)
+- Hogre kvalitet (langsammare): satt `FLOORPLAN_ENABLE_UPSCALE=true`
 
 ## Deploy
 
