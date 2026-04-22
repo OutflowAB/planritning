@@ -183,7 +183,10 @@ export default function UppladdningarPage() {
     setPreviewZoom(1);
   }
 
-  function getTouchDistance(touchA: Touch, touchB: Touch) {
+  function getTouchDistance(
+    touchA: Pick<TouchEvent<HTMLDivElement>["touches"][number], "clientX" | "clientY">,
+    touchB: Pick<TouchEvent<HTMLDivElement>["touches"][number], "clientX" | "clientY">,
+  ) {
     const deltaX = touchA.clientX - touchB.clientX;
     const deltaY = touchA.clientY - touchB.clientY;
     return Math.hypot(deltaX, deltaY);
