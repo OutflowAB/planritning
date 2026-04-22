@@ -292,7 +292,7 @@ export function FloorplanConverter() {
         body: formData,
       });
     } catch {
-      setErrorMessage("Uppladdning misslyckades — kunde inte starta lokal konvertering.");
+      setErrorMessage("Uppladdning misslyckades — kunde inte ansluta till servern.");
       setIsUploading(false);
       return;
     }

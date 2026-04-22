@@ -21,7 +21,7 @@ export async function GET(_request: Request, context: RouteContext) {
 
   if (job.status === "error") {
     return NextResponse.json(
-      { error: job.error ?? "Lokal konvertering misslyckades." },
+      { error: job.error ?? "Konverteringen misslyckades." },
       { status: 500 },
     );
   }

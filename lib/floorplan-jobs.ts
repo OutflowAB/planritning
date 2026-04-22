@@ -25,6 +25,7 @@ type FloorplanJob = {
 };
 
 const FLOORPLAN_DIR = path.join(process.cwd(), "floorplanconvert");
+const CONVERTER_SCRIPT = path.join(FLOORPLAN_DIR, "floorplan_converter.py");
 const RESULTS_DIR = path.join(FLOORPLAN_DIR, "tmp_results");
 const FONT_PATH = path.join(FLOORPLAN_DIR, "Montserrat-SemiBold.ttf");
 const VENV_PYTHON = path.join(FLOORPLAN_DIR, ".venv", "bin", "python");
@@ -72,16 +73,17 @@ function getPythonExecutable() {
 function getConverterFlags() {
   const enableUpscale = parseBooleanEnv("FLOORPLAN_ENABLE_UPSCALE", false);
   const enableTextReplacement = parseBooleanEnv("FLOORPLAN_ENABLE_TEXT_REPLACEMENT", true);
+  const fontAvailable = existsSync(FONT_PATH);
 
   const flags: string[] = [];
   if (!enableUpscale) {
     flags.push("--no_upscale");
   }
-  if (enableTextReplacement) {
+  if (enableTextReplacement && fontAvailable) {
     flags.push("--replace_text", "--font_path", FONT_PATH);
   }
 
-  return { flags, enableUpscale, enableTextReplacement };
+  return { flags, enableUpscale, enableTextReplacement, fontAvailable };
 }
 
 function normalizeLineBreaks(chunk: string) {
@@ -132,7 +134,7 @@ function runJob(job: FloorplanJob) {
     type: "log",
     data: "Starting conversion pipeline...",
   });
-  const { flags, enableUpscale, enableTextReplacement } = getConverterFlags();
+  const { flags, enableUpscale, enableTextReplacement, fontAvailable } = getConverterFlags();
   if (!enableUpscale) {
     emitJobEvent(job, {
       type: "log",
@@ -144,6 +146,11 @@ function runJob(job: FloorplanJob) {
       type: "log",
       data: "[speed] Text replacement disabled by config.",
     });
+  } else if (!fontAvailable) {
+    emitJobEvent(job, {
+      type: "log",
+      data: "[speed] Text replacement skipped: Montserrat-SemiBold.ttf missing in floorplanconvert/.",
+    });
   }
 
   const child = spawn(
@@ -152,7 +159,7 @@ function runJob(job: FloorplanJob) {
       "-u",
       "-W",
       PYTHON_WARNING_FILTER,
-      "floorplan_converter.py",
+      path.basename(CONVERTER_SCRIPT),
       job.inputPath,
       "--output_path",
       job.outputPath,
@@ -191,7 +198,7 @@ function runJob(job: FloorplanJob) {
 
   child.on("error", (error) => {
     job.status = "error";
-    job.error = `Kunde inte starta lokal konvertering: ${error.message}`;
+    job.error = `Kunde inte starta konverteringen: ${error.message}`;
     emitJobEvent(job, { type: "error", data: job.error });
   });
 
@@ -210,12 +217,18 @@ function runJob(job: FloorplanJob) {
     }
 
     job.status = "error";
-    job.error = "Lokal konvertering misslyckades.";
+    job.error = "Konverteringen misslyckades.";
     emitJobEvent(job, { type: "error", data: job.error });
   });
 }
 
 export async function createFloorplanJob(file: File) {
+  if (!existsSync(CONVERTER_SCRIPT)) {
+    throw new Error(
+      "Konverteringsmodulen saknas: lägg floorplan_converter.py i mappen floorplanconvert/ (ingår normalt i repot).",
+    );
+  }
+
   startCleanupLoop();
   await mkdir(RESULTS_DIR, { recursive: true });
 
@@ -263,7 +276,7 @@ export function onJobEvent(jobId: string, listener: (event: JobEvent) => void) {
   } else if (job.status === "error") {
     listener({
       type: "error",
-      data: job.error ?? "Lokal konvertering misslyckades.",
+      data: job.error ?? "Konverteringen misslyckades.",
     });
   }
 
@@ -311,7 +324,7 @@ export async function getJobDownload(jobId: string, format: DownloadFormat) {
     return {
       error:
         job.status === "error"
-          ? job.error ?? "Lokal konvertering misslyckades."
+          ? job.error ?? "Konverteringen misslyckades."
           : "Result not ready",
       status: job.status === "error" ? 500 : 404,
     } as const;
