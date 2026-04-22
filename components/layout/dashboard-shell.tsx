@@ -56,6 +56,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
   );
 
   const imageGenerationTotalCost = imageGenerationCount * IMAGE_GENERATION_COST_SEK;
+  const mobileNavItems = [...sidebarItems, settingsItem] as const;
 
   const loadGenerationStats = useCallback(async () => {
     const now = new Date();
@@ -101,15 +102,23 @@ export function DashboardShell({ children }: DashboardShellProps) {
     router.replace("/login");
   }
 
+  function isActivePath(href: string) {
+    if (href === "/dashboard") {
+      return pathname === href;
+    }
+
+    return pathname === href || pathname.startsWith(`${href}/`);
+  }
+
   return (
     <div className="flex min-h-screen flex-col">
       <header className="border-b border-white/10 bg-[#3f3f3f] text-white">
-        <div className="flex h-16 w-full items-center justify-between px-6">
+        <div className="flex h-16 w-full items-center justify-between px-4 md:px-6">
           <div className="flex items-center gap-6">
             <button
               type="button"
               onClick={() => setIsSidebarOpen((prev) => !prev)}
-              className="inline-flex items-center justify-center rounded-none px-2 py-1 text-white/90 transition hover:bg-white/10 hover:text-white"
+              className="hidden items-center justify-center rounded-none px-2 py-1 text-white/90 transition hover:bg-white/10 hover:text-white md:inline-flex"
               aria-label={isSidebarOpen ? "Dölj sidomeny" : "Visa sidomeny"}
             >
               <Bars3Icon className="h-[22px] w-[22px]" />
@@ -122,7 +131,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
             width={200}
             height={42}
             priority
-            className="h-10 w-auto brightness-0 invert"
+            className="h-9 w-auto brightness-0 invert md:h-10"
           />
 
           <div className="flex items-center gap-3">
@@ -198,8 +207,49 @@ export function DashboardShell({ children }: DashboardShellProps) {
           </div>
         </aside>
 
-        <main className="flex flex-1">{children}</main>
+        <div className="flex flex-1 flex-col">
+          <section className="border-b border-slate-200 bg-white px-4 py-3 text-slate-700 md:hidden">
+            <h3 className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Krediter ({currentMonthLabel})
+            </h3>
+            <p className="mt-2 text-sm">
+              Bildgenereringar: <span className="font-semibold">{imageGenerationCount}</span>
+            </p>
+            <p className="text-sm">
+              Kostnad: <span className="font-semibold">{imageGenerationTotalCost} kr</span>
+            </p>
+          </section>
+
+          <main className="flex flex-1 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-0">
+            {children}
+          </main>
+        </div>
       </div>
+
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#1f1f1f] text-white md:hidden"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        aria-label="Mobilnavigering"
+      >
+        <div className="flex items-stretch overflow-x-auto px-1 py-1">
+          {mobileNavItems.map((item) => {
+            const isActive = isActivePath(item.href);
+
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`inline-flex min-w-[88px] flex-1 flex-col items-center justify-center gap-1 rounded-sm px-3 py-2 text-[11px] font-medium transition ${
+                  isActive ? "bg-white/20 text-white" : "text-white/80 hover:bg-white/10 hover:text-white"
+                }`}
+              >
+                <item.icon className="h-4 w-4" aria-hidden="true" />
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }

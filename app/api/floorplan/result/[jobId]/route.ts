@@ -37,7 +37,7 @@ export async function GET(_request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Result not ready" }, { status: 404 });
   }
 
-  return new Response(bytes, {
+  return new Response(Uint8Array.from(bytes), {
     status: 200,
     headers: {
       "content-type": "image/png",
