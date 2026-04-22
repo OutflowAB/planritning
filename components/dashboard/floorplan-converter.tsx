@@ -70,7 +70,8 @@ export function FloorplanConverter() {
     if (!imagePath || imagePath === preloadedPathRef.current) {
       return;
     }
-    preloadedPathRef.current = imagePath;
+    const selectedImagePath = imagePath;
+    preloadedPathRef.current = selectedImagePath;
 
     if (imagePreviewUrl) {
       setErrorMessage("");
@@ -85,7 +86,7 @@ export function FloorplanConverter() {
       if (!sourceUrl) {
         const { data, error } = await supabase.storage
           .from(BUCKET_NAME)
-          .createSignedUrl(imagePath, 3600);
+          .createSignedUrl(selectedImagePath, 3600);
 
         if (isCancelled) {
           return;
@@ -117,7 +118,7 @@ export function FloorplanConverter() {
       }
 
       const blob = await response.blob();
-      const fallbackName = imagePath.split("/").pop() ?? "uppladdad-bild";
+      const fallbackName = selectedImagePath.split("/").pop() ?? "uppladdad-bild";
       const fileName = searchParams.get("imageName") || fallbackName;
       const fileType = blob.type || "image/png";
       const file = new File([blob], fileName, { type: fileType });
