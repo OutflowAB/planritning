@@ -2,7 +2,6 @@
 
 import {
   CalendarRange,
-  CircleDollarSign,
   CreditCard,
   Sparkles,
 } from "lucide-react";
@@ -125,8 +124,7 @@ export default function FaktureringPage() {
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               Kostnad
             </p>
-            <p className="mt-3 inline-flex items-center gap-2 text-3xl font-semibold text-slate-900">
-              <CircleDollarSign size={24} aria-hidden="true" />
+            <p className="mt-3 text-3xl font-semibold text-slate-900">
               {isLoading ? "..." : `${totalCostSek} kr`}
             </p>
             <p className="mt-2 text-xs text-slate-500">

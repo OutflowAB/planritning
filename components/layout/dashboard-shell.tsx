@@ -3,18 +3,18 @@
 import Link from "next/link";
 import Image from "next/image";
 import {
-  FileText,
-  History,
-  LayoutDashboard,
-  Library,
-  LogOut,
-  Menu,
-  ReceiptText,
-  Settings,
-  Upload,
-} from "lucide-react";
+  ArrowRightStartOnRectangleIcon,
+  ArrowUpTrayIcon,
+  Bars3Icon,
+  BookOpenIcon,
+  Cog6ToothIcon,
+  CreditCardIcon,
+  DocumentTextIcon,
+  Squares2X2Icon,
+  WrenchScrewdriverIcon,
+} from "@heroicons/react/24/outline";
 import { usePathname, useRouter } from "next/navigation";
-import { ReactNode, useCallback, useEffect, useState } from "react";
+import { ComponentType, ReactNode, SVGProps, useCallback, useEffect, useMemo, useState } from "react";
 
 import { setAuthenticated } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
@@ -23,32 +23,39 @@ type DashboardShellProps = {
   children: ReactNode;
 };
 
+type SidebarIcon = ComponentType<SVGProps<SVGSVGElement>>;
+
 const sidebarItems = [
-  { label: "Konvertera", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Bibliotek", href: "/dashboard/bibliotek", icon: Library },
-  { label: "Uppladdningar", href: "/dashboard/uppladdningar", icon: Upload },
-  { label: "Fakturering", href: "/dashboard/fakturering", icon: ReceiptText },
-  { label: "Verktyg", href: "/dashboard/historik", icon: History },
-  { label: "Skapa planritning", href: "/dashboard/rapporter", icon: FileText },
-] as const;
+  { label: "Konvertera", href: "/dashboard", icon: Squares2X2Icon },
+  { label: "Bibliotek", href: "/dashboard/bibliotek", icon: BookOpenIcon },
+  { label: "Uppladdningar", href: "/dashboard/uppladdningar", icon: ArrowUpTrayIcon },
+  { label: "Fakturering", href: "/dashboard/fakturering", icon: CreditCardIcon },
+  { label: "Verktyg", href: "/dashboard/historik", icon: WrenchScrewdriverIcon },
+  { label: "Skapa planritning", href: "/dashboard/rapporter", icon: DocumentTextIcon },
+] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
 
 const settingsItem = {
   label: "Inställningar",
   href: "/dashboard/installningar",
-  icon: Settings,
-} as const;
+  icon: Cog6ToothIcon,
+} as const satisfies { label: string; href: string; icon: SidebarIcon };
 
 const IMAGE_GENERATION_COST_SEK = 80;
 const GENERATIONS_TABLE = "generation_events";
-const currentMonthLabel = new Date().toLocaleDateString("sv-SE", {
-  month: "long",
-});
 
 export function DashboardShell({ children }: DashboardShellProps) {
   const router = useRouter();
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [imageGenerationCount, setImageGenerationCount] = useState(0);
+  const currentMonthLabel = useMemo(
+    () =>
+      new Date().toLocaleDateString("sv-SE", {
+        month: "long",
+        timeZone: "UTC",
+      }),
+    [],
+  );
 
   const imageGenerationTotalCost = imageGenerationCount * IMAGE_GENERATION_COST_SEK;
 
@@ -104,10 +111,10 @@ export function DashboardShell({ children }: DashboardShellProps) {
             <button
               type="button"
               onClick={() => setIsSidebarOpen((prev) => !prev)}
-              className="inline-flex items-center justify-center rounded-md p-1 text-white/90 transition hover:bg-white/10 hover:text-white"
+              className="inline-flex items-center justify-center rounded-md px-2 py-1 text-white/90 transition hover:bg-white/10 hover:text-white"
               aria-label={isSidebarOpen ? "Dölj sidomeny" : "Visa sidomeny"}
             >
-              <Menu size={22} />
+              <Bars3Icon className="h-[22px] w-[22px]" />
             </button>
           </div>
 
@@ -126,7 +133,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
               onClick={handleLogout}
               className="inline-flex items-center gap-2 rounded-md px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10"
             >
-              <LogOut size={14} aria-hidden="true" />
+              <ArrowRightStartOnRectangleIcon className="h-[14px] w-[14px]" aria-hidden="true" />
               Logga ut
             </button>
           </div>
@@ -134,14 +141,15 @@ export function DashboardShell({ children }: DashboardShellProps) {
       </header>
       <div className="flex w-full flex-1">
         <aside
-          className={`hidden overflow-hidden border-r bg-[#1f1f1f] text-white transition-[width,padding,opacity,border-color] duration-300 ease-in-out md:flex md:flex-col ${
+          className={`hidden h-[calc(100dvh-4rem)] overflow-hidden border-r bg-[#1f1f1f] text-white transition-[width,padding,opacity,border-color] duration-300 ease-in-out md:flex md:flex-col ${
             isSidebarOpen
               ? "w-64 border-white/10 p-4 opacity-100"
               : "w-0 border-transparent p-0 opacity-0"
           }`}
+          aria-label="Huvudnavigering"
         >
-          <nav
-            className={`flex h-full min-w-64 flex-col space-y-1 transition-opacity duration-200 ${
+          <div
+            className={`flex h-full min-w-64 flex-col space-y-3 overflow-y-auto transition-opacity duration-200 ${
               isSidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"
             }`}
           >
@@ -155,7 +163,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
                     : "text-white/85 hover:bg-white/10 hover:text-white"
                 }`}
               >
-                <item.icon size={16} aria-hidden="true" />
+                <item.icon className="h-4 w-4" aria-hidden="true" />
                 <span>{item.label}</span>
               </Link>
             ))}
@@ -168,7 +176,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
                   : "text-white/85 hover:bg-white/10 hover:text-white"
               }`}
             >
-              <settingsItem.icon size={16} aria-hidden="true" />
+              <settingsItem.icon className="h-4 w-4" aria-hidden="true" />
               <span>{settingsItem.label}</span>
             </Link>
 
@@ -189,7 +197,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
                 </span>
               </p>
             </section>
-          </nav>
+          </div>
         </aside>
 
         <main className="flex flex-1">{children}</main>

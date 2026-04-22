@@ -17,7 +17,7 @@ ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=change-me
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
-FLOORPLAN_WIDGET_ORIGIN=http://127.0.0.1:5000
+FLOORPLAN_API_ORIGIN=http://127.0.0.1:5000
 ```
 
 3. Starta utvecklingsservern:
@@ -28,11 +28,11 @@ npm run dev
 
 Appen kor pa [http://localhost:3000](http://localhost:3000).
 
-## Floorplanconvert-widget
+## Floorplanconvert
 
-Konverteringsverktyget i `floorplanconvert` ar nu inbaddat pa `dashboard`-sidan via en Next-rewrite till `/floorplan-widget`.
+Konverteringsverktyget i `floorplanconvert` ar nu inbyggt direkt i `dashboard`-sidan (ingen iframe/widget). Frontenden i Next anropar API-routes under `/api/floorplan/*`.
 
-Starta widget-servern i en separat terminal:
+Starta konverteringsservern i en separat terminal:
 
 ```bash
 cd floorplanconvert
@@ -40,7 +40,7 @@ source .venv/bin/activate
 python server.py
 ```
 
-Om widgeten kor pa en annan host/port, andra `FLOORPLAN_WIDGET_ORIGIN` i `.env.local`.
+Om konverteringsservern kor pa en annan host/port, andra `FLOORPLAN_API_ORIGIN` i `.env.local`.
 
 ## Deploy
 
