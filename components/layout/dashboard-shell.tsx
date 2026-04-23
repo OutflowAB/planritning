@@ -6,7 +6,7 @@ import {
   ArrowRightStartOnRectangleIcon,
   ArrowUpTrayIcon,
   Bars3Icon,
-  BookOpenIcon,
+  BuildingOffice2Icon,
   Cog6ToothIcon,
   CreditCardIcon,
   Squares2X2Icon,
@@ -27,7 +27,7 @@ type SidebarIcon = ComponentType<SVGProps<SVGSVGElement>>;
 const sidebarItems = [
   { label: "Startsida", href: "/startsida", icon: Squares2X2Icon },
   { label: "Verktyg", href: "/verktyg", icon: WrenchScrewdriverIcon },
-  { label: "Bibliotek", href: "/bibliotek", icon: BookOpenIcon },
+  { label: "Planritningar", href: "/planritningar", icon: BuildingOffice2Icon },
   { label: "Uppladdningar", href: "/uppladdningar", icon: ArrowUpTrayIcon },
   { label: "Fakturering", href: "/fakturering", icon: CreditCardIcon },
 ] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
@@ -39,7 +39,9 @@ const settingsItem = {
 } as const satisfies { label: string; href: string; icon: SidebarIcon };
 
 const IMAGE_GENERATION_COST_SEK = 80;
-const GENERATIONS_TABLE = "generation_events";
+const GENERATION_EVENTS_TABLE = "generation_events";
+const GENERATION_EVENTS_EVENT = "generation_events";
+const LEGACY_GENERATION_EVENT = "generation-updated";
 
 export function DashboardShell({ children }: DashboardShellProps) {
   const router = useRouter();
@@ -68,7 +70,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
     ).toISOString();
 
     const { count, error } = await supabase
-      .from(GENERATIONS_TABLE)
+      .from(GENERATION_EVENTS_TABLE)
       .select("id", { count: "exact", head: true })
       .gte("created_at", monthStart)
       .lt("created_at", monthEnd);
@@ -89,11 +91,13 @@ export function DashboardShell({ children }: DashboardShellProps) {
       void loadGenerationStats();
     }
 
-    window.addEventListener("generation-updated", handleGenerationUpdated);
+    window.addEventListener(GENERATION_EVENTS_EVENT, handleGenerationUpdated);
+    window.addEventListener(LEGACY_GENERATION_EVENT, handleGenerationUpdated);
 
     return () => {
       window.clearTimeout(timer);
-      window.removeEventListener("generation-updated", handleGenerationUpdated);
+      window.removeEventListener(GENERATION_EVENTS_EVENT, handleGenerationUpdated);
+      window.removeEventListener(LEGACY_GENERATION_EVENT, handleGenerationUpdated);
     };
   }, [loadGenerationStats]);
 
@@ -111,8 +115,8 @@ export function DashboardShell({ children }: DashboardShellProps) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="border-b border-white/10 bg-[#3f3f3f] text-white">
+    <div className="flex min-h-screen flex-col pt-16">
+      <header className="fixed inset-x-0 top-0 z-50 border-b border-white/10 bg-[#3f3f3f] text-white">
         <div className="flex h-16 w-full items-center justify-between px-4 md:px-6">
           <div className="flex items-center gap-6">
             <button
@@ -146,9 +150,9 @@ export function DashboardShell({ children }: DashboardShellProps) {
           </div>
         </div>
       </header>
-      <div className="flex w-full flex-1">
+      <div className="flex w-full flex-1 min-h-0">
         <aside
-          className={`hidden h-[calc(100dvh-4rem)] overflow-hidden border-r bg-[#1f1f1f] text-white transition-[width,padding,opacity,border-color] duration-300 ease-in-out md:flex md:flex-col ${
+          className={`sticky top-16 hidden h-[calc(100dvh-4rem)] overflow-hidden border-r bg-[#1f1f1f] text-white transition-[width,padding,opacity,border-color] duration-300 ease-in-out md:flex md:flex-col ${
             isSidebarOpen
               ? "w-64 border-white/10 p-4 opacity-100"
               : "w-0 border-transparent p-0 opacity-0"
@@ -156,7 +160,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
           aria-label="Huvudnavigering"
         >
           <div
-            className={`flex h-full min-w-64 flex-col overflow-y-auto pt-3 transition-opacity duration-200 ${
+            className={`flex h-full min-w-64 flex-col overflow-hidden pt-3 transition-opacity duration-200 ${
               isSidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"
             }`}
           >
@@ -207,7 +211,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
           </div>
         </aside>
 
-        <div className="flex flex-1 flex-col">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           <section className="border-b border-slate-200 bg-white px-4 py-3 text-slate-700 md:hidden">
             <h3 className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
               Krediter ({currentMonthLabel})
@@ -220,7 +224,7 @@ export function DashboardShell({ children }: DashboardShellProps) {
             </p>
           </section>
 
-          <main className="flex flex-1 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-0">
+          <main className="flex min-h-0 flex-1 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-0">
             {children}
           </main>
         </div>

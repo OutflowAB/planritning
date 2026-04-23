@@ -184,13 +184,13 @@ export default function FaktureringPage() {
             <div className="w-full md:w-auto">
               <div
                 ref={periodMenuRef}
-                className="relative flex w-full flex-nowrap items-center justify-center gap-1 rounded-none border border-[#d8d2c8] bg-[#f7f4ef] p-1 md:w-auto"
+                className="relative flex w-full flex-nowrap items-center justify-center gap-1 rounded-md border border-[#d8d2c8] bg-[#f7f4ef] p-1 md:w-auto"
               >
               <button
                 type="button"
                 aria-label="Föregående period"
                 onClick={() => setPeriodOffset((previous) => previous - 1)}
-                className="flex h-10 w-12 shrink-0 items-center justify-center rounded-none border border-[#d8d2c8] bg-transparent text-[#5b544a] transition hover:bg-white focus:outline-none"
+                className="flex h-10 w-12 shrink-0 items-center justify-center rounded-sm border border-[#d8d2c8] bg-transparent text-[#5b544a] transition hover:bg-white focus:outline-none"
               >
                 <ChevronLeft size={16} aria-hidden="true" />
               </button>
@@ -200,7 +200,7 @@ export default function FaktureringPage() {
                 aria-expanded={isPeriodMenuOpen}
                 aria-label="Välj period"
                 onClick={() => setIsPeriodMenuOpen((previous) => !previous)}
-                className="flex h-10 w-[150px] shrink-0 cursor-pointer items-center justify-center rounded-none bg-transparent px-4 py-2 text-sm font-semibold text-[#3d3a36] outline-none transition"
+                className="flex h-10 w-[150px] shrink-0 cursor-pointer items-center justify-center rounded-sm bg-transparent px-4 py-2 text-sm font-semibold text-[#3d3a36] outline-none transition"
               >
                 <span className="w-full truncate text-center">{periodHeading}</span>
               </button>
@@ -209,7 +209,7 @@ export default function FaktureringPage() {
                 aria-label="Nästa period"
                 onClick={() => setPeriodOffset((previous) => Math.min(0, previous + 1))}
                 disabled={!canStepForward}
-                className="flex h-10 w-12 shrink-0 items-center justify-center rounded-none border border-[#d8d2c8] bg-transparent text-[#5b544a] transition hover:bg-white focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
+                className="flex h-10 w-12 shrink-0 items-center justify-center rounded-sm border border-[#d8d2c8] bg-transparent text-[#5b544a] transition hover:bg-white focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
               >
                 <ChevronRight size={16} aria-hidden="true" />
               </button>
@@ -306,7 +306,9 @@ export default function FaktureringPage() {
                     className="flex items-center justify-between gap-3 px-4 py-3 text-sm transition hover:bg-[#f2ede5]"
                   >
                     <div className="min-w-0">
-                      <p className="truncate font-medium text-[#3d3a36]">{log.file_name}</p>
+                      <p className="truncate font-medium text-[#3d3a36]">
+                        Bild {log.id} - {log.file_name}
+                      </p>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-xs text-[#7b746a]">

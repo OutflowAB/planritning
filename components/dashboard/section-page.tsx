@@ -13,7 +13,7 @@ export function SectionPage({ title, placeholderText, children }: SectionPagePro
 
   return (
     <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
-      <div className="mx-auto flex w-full max-w-5xl flex-col items-center text-center text-slate-800">
+      <div className="mx-auto flex w-full max-w-5xl flex-col text-left text-slate-800">
         {placeholderText ? (
           <div className="w-full">
             <ToolPlaceholder className="border-slate-300 bg-slate-50 text-slate-600">
@@ -23,7 +23,7 @@ export function SectionPage({ title, placeholderText, children }: SectionPagePro
             </ToolPlaceholder>
           </div>
         ) : null}
-        {children ? <div className="mt-8 w-full">{children}</div> : null}
+        {children ? <div className="flex w-full justify-center">{children}</div> : null}
       </div>
     </section>
   );
