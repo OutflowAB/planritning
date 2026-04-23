@@ -302,7 +302,7 @@ export async function POST(request: Request) {
     const { data: signedImageData } = await supabase.storage.from(BUCKET_NAME).createSignedUrl(storagePath, 3600);
     const savedImageUrl = signedImageData?.signedUrl ?? null;
 
-    return new Response(outputBuffer, {
+    return new Response(new Uint8Array(outputBuffer), {
       status: 200,
       headers: {
         "Content-Type": "image/png",
