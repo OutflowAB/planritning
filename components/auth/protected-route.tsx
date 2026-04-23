@@ -3,13 +3,14 @@
 import { useRouter } from "next/navigation";
 import { ReactNode, useEffect, useState } from "react";
 
-import { isAuthenticated } from "@/lib/auth";
+import { getStoredRole, isAuthenticated, type UserRole } from "@/lib/auth";
 
 type ProtectedRouteProps = {
   children: ReactNode;
+  requiredRole?: UserRole;
 };
 
-export function ProtectedRoute({ children }: ProtectedRouteProps) {
+export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) {
   const router = useRouter();
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
 
@@ -26,6 +27,17 @@ export function ProtectedRoute({ children }: ProtectedRouteProps) {
       router.replace("/login");
     }
   }, [authenticated, router]);
+
+  useEffect(() => {
+    if (authenticated !== true || !requiredRole) {
+      return;
+    }
+
+    const currentRole = getStoredRole();
+    if (currentRole !== requiredRole) {
+      router.replace(currentRole === "admin" ? "/admin/dashboard" : "/startsida");
+    }
+  }, [authenticated, requiredRole, router]);
 
   if (authenticated !== true) {
     return (

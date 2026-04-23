@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -49,6 +50,8 @@ type GenerationLogRow = {
 };
 
 export default function FaktureringPage() {
+  const pathname = usePathname();
+  const bibliotekPath = pathname.startsWith("/admin") ? "/admin/bibliotek" : "/bibliotek";
   const [selectedPeriod, setSelectedPeriod] = useState<PeriodKey>("current_month");
   const [periodOffset, setPeriodOffset] = useState(0);
   const [isPeriodMenuOpen, setIsPeriodMenuOpen] = useState(false);
@@ -302,7 +305,7 @@ export default function FaktureringPage() {
                 {generationLogs.map((log) => (
                   <Link
                     key={log.id}
-                    href={`/bibliotek?imageId=${log.id}&imagePath=${encodeURIComponent(log.file_path)}&previewImageId=${log.id}&previewImagePath=${encodeURIComponent(log.file_path)}`}
+                    href={`${bibliotekPath}?imageId=${log.id}&imagePath=${encodeURIComponent(log.file_path)}&previewImageId=${log.id}&previewImagePath=${encodeURIComponent(log.file_path)}`}
                     className="flex items-center justify-between gap-3 px-4 py-3 text-sm transition hover:bg-[#f2ede5]"
                   >
                     <div className="min-w-0">

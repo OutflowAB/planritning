@@ -1,10 +1,11 @@
 "use client";
 
 import Image from "next/image";
-import { Download, Loader2, Minus, Plus, RotateCcw, X } from "lucide-react";
+import { Download, Loader2, Minus, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { TouchEvent, WheelEvent, useEffect, useRef, useState } from "react";
 
+import { getStoredRole } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 
 const BUCKET_NAME = "planritningar";
@@ -14,6 +15,8 @@ const PREVIEW_CACHE_KEY = "library-preview-cache-v1";
 const PREVIEW_CACHE_TTL_MS = 55 * 60 * 1000;
 const LIBRARY_LIST_CACHE_KEY = "library-list-cache-v1";
 const LIBRARY_LIST_CACHE_TTL_MS = 15 * 60 * 1000;
+const GENERATION_EVENTS_EVENT = "generation_events";
+const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
@@ -122,11 +125,15 @@ export default function BibliotekPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const canDelete = pathname.startsWith("/admin") || getStoredRole() === "admin";
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [actionSuccess, setActionSuccess] = useState("");
   const [images, setImages] = useState<GeneratedImageRow[]>([]);
+  const [selectedImageIds, setSelectedImageIds] = useState<number[]>([]);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [isPreviewDownloading, setIsPreviewDownloading] = useState(false);
+  const [isDeletingSelected, setIsDeletingSelected] = useState(false);
   const pinchStartDistanceRef = useRef<number | null>(null);
   const pinchStartZoomRef = useRef<number>(1);
   const selectedImageId = searchParams.get("imageId");
@@ -283,6 +290,87 @@ export default function BibliotekPage() {
     }
   }
 
+  function toggleImageSelection(imageId: number) {
+    setSelectedImageIds((previous) =>
+      previous.includes(imageId)
+        ? previous.filter((id) => id !== imageId)
+        : [...previous, imageId],
+    );
+  }
+
+  function toggleSelectAllImages() {
+    setSelectedImageIds((previous) =>
+      previous.length === images.length ? [] : images.map((image) => image.id),
+    );
+  }
+
+  async function handleDeleteSelectedImages() {
+    if (!canDelete || isDeletingSelected || selectedImageIds.length === 0) {
+      return;
+    }
+
+    setLoadError("");
+    setActionSuccess("");
+    setIsDeletingSelected(true);
+
+    const selectedImages = images.filter((image) => selectedImageIds.includes(image.id));
+    const deletedIds: number[] = [];
+    let failedCount = 0;
+    let lastErrorMessage = "";
+
+    try {
+      for (const image of selectedImages) {
+        const response = await fetch("/api/admin/delete-image", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            id: image.id,
+            filePath: image.file_path,
+          }),
+        });
+        const data = (await response.json()) as { message?: string };
+
+        if (!response.ok) {
+          failedCount += 1;
+          lastErrorMessage = data.message ?? "Kunde inte ta bort bilden.";
+          continue;
+        }
+
+        deletedIds.push(image.id);
+
+        if (previewImage?.id === image.id) {
+          closeImagePreview();
+        }
+      }
+
+      if (deletedIds.length > 0) {
+        setImages((previous) => previous.filter((entry) => !deletedIds.includes(entry.id)));
+        setSelectedImageIds((previous) => previous.filter((id) => !deletedIds.includes(id)));
+        setActionSuccess(
+          deletedIds.length === 1
+            ? "1 bild raderades."
+            : `${deletedIds.length} bilder raderades.`,
+        );
+        await loadLibrary(true);
+        window.dispatchEvent(new CustomEvent("library-updated"));
+        window.dispatchEvent(new Event(GENERATION_EVENTS_EVENT));
+        window.dispatchEvent(new Event(LEGACY_GENERATION_EVENT));
+      }
+
+      if (failedCount > 0) {
+        setLoadError(
+          failedCount === 1
+            ? lastErrorMessage || "Kunde inte ta bort en markerad bild."
+            : `Kunde inte ta bort ${failedCount} markerade bilder.`,
+        );
+      }
+    } finally {
+      setIsDeletingSelected(false);
+    }
+  }
+
   async function loadLibrary(forceRefresh = false) {
     setLoadError("");
     if (!forceRefresh) {
@@ -360,6 +448,9 @@ export default function BibliotekPage() {
     }));
 
     setImages(rowsWithPreview);
+    setSelectedImageIds((previous) =>
+      previous.filter((id) => rowsWithPreview.some((row) => row.id === id)),
+    );
     writeLibraryListCache(rowsWithPreview);
     setIsLoading(false);
   }
@@ -421,6 +512,31 @@ export default function BibliotekPage() {
       <div className="w-full rounded-none border border-[#d8d2c8] bg-white p-6 shadow-sm">
         <div className="flex items-start justify-between gap-4">
           <h1 className="text-2xl font-semibold text-[#3d3a36]">Planritningar</h1>
+          {canDelete ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleSelectAllImages}
+                disabled={isDeletingSelected || images.length === 0}
+                className="rounded-none border border-[#d8d2c8] bg-white px-3 py-1.5 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {selectedImageIds.length === images.length && images.length > 0
+                  ? "Avmarkera alla"
+                  : "Markera alla"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleDeleteSelectedImages()}
+                disabled={isDeletingSelected || selectedImageIds.length === 0}
+                className="inline-flex items-center gap-1 rounded-none border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Trash2 size={12} aria-hidden="true" />
+                {isDeletingSelected
+                  ? "Tar bort..."
+                  : `Ta bort markerade (${selectedImageIds.length})`}
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {isLoading ? (
@@ -435,6 +551,11 @@ export default function BibliotekPage() {
             {loadError}
           </p>
         ) : null}
+        {actionSuccess ? (
+          <p className="mt-6 rounded-none border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            {actionSuccess}
+          </p>
+        ) : null}
 
         {!isLoading && !loadError && images.length === 0 ? (
           <p className="mt-6 text-sm text-[#6a6258]">
@@ -444,21 +565,37 @@ export default function BibliotekPage() {
 
         {!isLoading && !loadError && images.length > 0 ? (
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
-            {images.map((image) => (
+            {images.map((image) => {
+              const isMarked = selectedImageIds.includes(image.id);
+
+              return (
               <article
                 key={image.id}
                 id={`library-image-${image.id}`}
                 className={`overflow-hidden rounded-none border bg-white ${
-                  selectedImage?.id === image.id
+                  selectedImage?.id === image.id || isMarked
                     ? "border-[#8b7355] shadow-[0_0_0_2px_rgba(139,115,85,0.2)]"
                     : "border-[#d8d2c8]"
                 }`}
               >
-                <div className="flex items-center justify-between gap-3 border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
-                  <p className="shrink-0 text-xs font-medium text-[#7b746a]">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+                  <p className="text-xs font-medium text-[#7b746a]">
                     {new Date(image.created_at).toLocaleString("sv-SE")}
                   </p>
-                  <p className="shrink-0 text-xs font-semibold text-[#6a6258]">Bild {image.id}</p>
+                  <div className="ml-auto flex items-center gap-2">
+                    <p className="text-xs font-semibold text-[#6a6258]">Bild {image.id}</p>
+                    {canDelete ? (
+                      <label className="inline-flex items-center">
+                        <input
+                          type="checkbox"
+                          checked={isMarked}
+                          onChange={() => toggleImageSelection(image.id)}
+                          disabled={isDeletingSelected}
+                          className="h-5 w-5 rounded border-[#b7aea1] text-[#8b7355] focus:ring-[#8b7355]"
+                        />
+                      </label>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-center bg-[#f0ece6] p-4">
@@ -483,7 +620,8 @@ export default function BibliotekPage() {
                   )}
                 </div>
               </article>
-            ))}
+              );
+            })}
           </div>
         ) : null}
       </div>

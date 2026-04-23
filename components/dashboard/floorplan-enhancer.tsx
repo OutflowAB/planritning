@@ -24,6 +24,7 @@ type SourcePreviewCachePayload = {
 type ConverterTransferPayload = {
   previewUrl: string;
   fileName?: string;
+  uploadId?: number;
 };
 
 function statusLabel(status: ProcessingStatus): string {
@@ -199,6 +200,7 @@ export function FloorplanEnhancer() {
   const [isResultDownloading, setIsResultDownloading] = useState(false);
   const [resultImageId, setResultImageId] = useState<number | null>(null);
   const [resultImagePath, setResultImagePath] = useState<string | null>(null);
+  const [sourceImageId, setSourceImageId] = useState<number | null>(null);
   const [previewImageType, setPreviewImageType] = useState<"source" | "result" | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -248,6 +250,9 @@ export function FloorplanEnhancer() {
 
           setErrorMessage("");
           setSourceFile(file);
+          setSourceImageId(
+            typeof transferredSource.uploadId === "number" ? transferredSource.uploadId : null,
+          );
           setSourcePreviewUrl((prev) => {
             revokeIfObjectUrl(prev);
             return objectUrl;
@@ -265,6 +270,7 @@ export function FloorplanEnhancer() {
       }
 
       setSourcePreviewUrl(cachedPreview);
+      setSourceImageId(null);
       const cachedFile = dataUrlToFile(cachedPreview);
       if (cachedFile) {
         setSourceFile(cachedFile);
@@ -307,6 +313,7 @@ export function FloorplanEnhancer() {
     setIsSubmitting(false);
     setStatus("idle");
     setSourceFile(null);
+    setSourceImageId(null);
     setIsDragActive(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -331,6 +338,7 @@ export function FloorplanEnhancer() {
 
     setErrorMessage("");
     setSourceFile(file);
+    setSourceImageId(null);
     setSourcePreviewUrl((prev) => {
       revokeIfObjectUrl(prev);
       return URL.createObjectURL(file);
@@ -373,6 +381,9 @@ export function FloorplanEnhancer() {
     try {
       const payload = new FormData();
       payload.append("file", file);
+      if (sourceImageId) {
+        payload.append("sourceImageId", String(sourceImageId));
+      }
 
       const requestPromise = fetch("/api/convert", {
         method: "POST",
@@ -402,10 +413,18 @@ export function FloorplanEnhancer() {
       const savedImageIdHeader = response.headers.get("x-saved-image-id");
       const savedImagePath = response.headers.get("x-saved-image-path");
       const savedImageUrl = response.headers.get("x-saved-image-url");
+      const sourceImageIdHeader = response.headers.get("x-source-image-id");
       const parsedSavedImageId =
         savedImageIdHeader && !Number.isNaN(Number(savedImageIdHeader))
           ? Number(savedImageIdHeader)
           : null;
+      const parsedSourceImageId =
+        sourceImageIdHeader && !Number.isNaN(Number(sourceImageIdHeader))
+          ? Number(sourceImageIdHeader)
+          : null;
+      if (parsedSourceImageId) {
+        setSourceImageId(parsedSourceImageId);
+      }
       setResultImageId(parsedSavedImageId);
       setResultImagePath(savedImagePath ?? extractStoragePathFromSignedUrl(savedImageUrl));
       const resultBlob = await response.blob();

@@ -1,10 +1,11 @@
 "use client";
 
 import Image from "next/image";
-import { Download, Loader2, Minus, Plus, RotateCcw, Upload, X } from "lucide-react";
+import { Download, Loader2, Minus, Plus, RotateCcw, Trash2, Upload, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, TouchEvent, WheelEvent, useEffect, useRef, useState } from "react";
 
+import { getStoredRole } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 
 const BUCKET_NAME = "planritningar";
@@ -15,6 +16,8 @@ const PREVIEW_CACHE_TTL_MS = 55 * 60 * 1000;
 const UPLOADS_LIST_CACHE_KEY = "uploads-list-cache-v1";
 const UPLOADS_LIST_CACHE_TTL_MS = 15 * 60 * 1000;
 const CONVERTER_TRANSFER_KEY = "converter-selected-upload-v1";
+const GENERATION_EVENTS_EVENT = "generation_events";
+const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
@@ -48,6 +51,7 @@ type UploadsListCachePayload = {
 type ConverterTransferPayload = {
   previewUrl: string;
   fileName: string;
+  uploadId: number;
 };
 
 function readPreviewCache() {
@@ -134,6 +138,8 @@ export default function UppladdningarPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const canDelete = pathname.startsWith("/admin") || getStoredRole() === "admin";
+  const converterPath = pathname.startsWith("/admin") ? "/admin/dashboard" : "/startsida";
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploaderOpen, setIsUploaderOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -143,9 +149,11 @@ export default function UppladdningarPage() {
   const [success, setSuccess] = useState("");
   const [lastUpload, setLastUpload] = useState<UploadResult | null>(null);
   const [uploads, setUploads] = useState<UploadedImageRow[]>([]);
+  const [selectedUploadIds, setSelectedUploadIds] = useState<number[]>([]);
   const [loadedPreviewIds, setLoadedPreviewIds] = useState<Record<number, boolean>>({});
   const [previewZoom, setPreviewZoom] = useState(1);
   const [isPreviewDownloading, setIsPreviewDownloading] = useState(false);
+  const [isDeletingSelected, setIsDeletingSelected] = useState(false);
   const pinchStartDistanceRef = useRef<number | null>(null);
   const pinchStartZoomRef = useRef<number>(1);
   const previewImageId = searchParams.get("previewImageId");
@@ -172,11 +180,12 @@ export default function UppladdningarPage() {
       const payload: ConverterTransferPayload = {
         previewUrl: upload.preview_url,
         fileName: upload.file_name,
+        uploadId: upload.id,
       };
       window.sessionStorage.setItem(CONVERTER_TRANSFER_KEY, JSON.stringify(payload));
     }
 
-    router.push("/startsida");
+    router.push(converterPath);
   }
 
   function closeImagePreview() {
@@ -280,6 +289,88 @@ export default function UppladdningarPage() {
     }
   }
 
+  function toggleUploadSelection(uploadId: number) {
+    setSelectedUploadIds((previous) =>
+      previous.includes(uploadId)
+        ? previous.filter((id) => id !== uploadId)
+        : [...previous, uploadId],
+    );
+  }
+
+  function toggleSelectAllUploads() {
+    setSelectedUploadIds((previous) =>
+      previous.length === uploads.length ? [] : uploads.map((upload) => upload.id),
+    );
+  }
+
+  async function handleDeleteSelectedUploads() {
+    if (!canDelete || isDeletingSelected || selectedUploadIds.length === 0) {
+      return;
+    }
+
+    setError("");
+    setSuccess("");
+    setLoadError("");
+    setIsDeletingSelected(true);
+
+    const selectedUploads = uploads.filter((upload) => selectedUploadIds.includes(upload.id));
+    const deletedIds: number[] = [];
+    let failedCount = 0;
+    let lastErrorMessage = "";
+
+    try {
+      for (const upload of selectedUploads) {
+        const response = await fetch("/api/admin/delete-image", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            id: upload.id,
+            filePath: upload.file_path,
+          }),
+        });
+        const data = (await response.json()) as { message?: string };
+
+        if (!response.ok) {
+          failedCount += 1;
+          lastErrorMessage = data.message ?? "Kunde inte ta bort uppladdningen.";
+          continue;
+        }
+
+        deletedIds.push(upload.id);
+
+        if (previewImage?.id === upload.id) {
+          closeImagePreview();
+        }
+      }
+
+      if (deletedIds.length > 0) {
+        setUploads((previous) => previous.filter((entry) => !deletedIds.includes(entry.id)));
+        setSelectedUploadIds((previous) => previous.filter((id) => !deletedIds.includes(id)));
+        setSuccess(
+          deletedIds.length === 1
+            ? "1 uppladdning raderades."
+            : `${deletedIds.length} uppladdningar raderades.`,
+        );
+        await loadUploads(true);
+        window.dispatchEvent(new CustomEvent("library-updated"));
+        window.dispatchEvent(new Event(GENERATION_EVENTS_EVENT));
+        window.dispatchEvent(new Event(LEGACY_GENERATION_EVENT));
+      }
+
+      if (failedCount > 0) {
+        setLoadError(
+          failedCount === 1
+            ? lastErrorMessage || "Kunde inte ta bort en markerad uppladdning."
+            : `Kunde inte ta bort ${failedCount} markerade uppladdningar.`,
+        );
+      }
+    } finally {
+      setIsDeletingSelected(false);
+    }
+  }
+
   async function loadUploads(forceRefresh = false) {
     setLoadError("");
     if (!forceRefresh) {
@@ -358,6 +449,9 @@ export default function UppladdningarPage() {
     }));
 
     setUploads(rowsWithPreview);
+    setSelectedUploadIds((previous) =>
+      previous.filter((id) => rowsWithPreview.some((row) => row.id === id)),
+    );
     writeUploadsListCache(rowsWithPreview);
     setIsLoadingUploads(false);
   }
@@ -466,14 +560,41 @@ export default function UppladdningarPage() {
           <div>
             <h1 className="text-2xl font-semibold text-[#3d3a36]">Uppladdningar</h1>
           </div>
-          <button
-            type="button"
-            onClick={() => setIsUploaderOpen(true)}
-            className="shrink-0 inline-flex items-center gap-1.5 rounded-none border border-[#d8d2c8] bg-[#f7f4ef] px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#eee8df]"
-          >
-            <Upload size={14} aria-hidden="true" />
-            Ladda upp
-          </button>
+          <div className="flex items-center gap-2">
+            {canDelete ? (
+              <>
+                <button
+                  type="button"
+                  onClick={toggleSelectAllUploads}
+                  disabled={isDeletingSelected || uploads.length === 0}
+                  className="rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {selectedUploadIds.length === uploads.length && uploads.length > 0
+                    ? "Avmarkera alla"
+                    : "Markera alla"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteSelectedUploads()}
+                  disabled={isDeletingSelected || selectedUploadIds.length === 0}
+                  className="inline-flex items-center gap-1 rounded-none border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Trash2 size={12} aria-hidden="true" />
+                  {isDeletingSelected
+                    ? "Tar bort..."
+                    : `Ta bort markerade (${selectedUploadIds.length})`}
+                </button>
+              </>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setIsUploaderOpen(true)}
+              className="shrink-0 inline-flex items-center gap-1.5 rounded-none border border-[#d8d2c8] bg-[#f7f4ef] px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#eee8df]"
+            >
+              <Upload size={14} aria-hidden="true" />
+              Ladda upp
+            </button>
+          </div>
         </div>
 
         {error ? (
@@ -529,32 +650,50 @@ export default function UppladdningarPage() {
             <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
               {uploads.map((upload) => {
                 const isPreviewReady = !upload.preview_url || loadedPreviewIds[upload.id];
+                const isMarked = selectedUploadIds.includes(upload.id);
 
                 return (
                 <article
                   key={upload.id}
-                  className="overflow-hidden rounded-none border border-[#d8d2c8] bg-white"
+                  className={`overflow-hidden rounded-none border bg-white ${
+                    isMarked
+                      ? "border-[#8b7355] shadow-[0_0_0_2px_rgba(139,115,85,0.2)]"
+                      : "border-[#d8d2c8]"
+                  }`}
                 >
-                  <div className="flex items-center justify-between gap-3 border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
-                    <p className="shrink-0 text-xs font-medium text-[#7b746a]">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+                    <p className="text-xs font-medium text-[#7b746a]">
                       {new Date(upload.created_at).toLocaleString("sv-SE")}
                     </p>
-                    {isPreviewReady ? (
-                      <button
-                        type="button"
-                        onClick={() => goToConverter(upload)}
-                        aria-label="Konvertera"
-                        title="Konvertera"
-                        className="rounded-none border border-[#d8d2c8] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
-                      >
-                        Konvertera
-                      </button>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#7b746a]">
-                        <Loader2 size={12} className="animate-spin" aria-hidden="true" />
-                        Laddar...
-                      </span>
-                    )}
+                    <div className="ml-auto flex items-center gap-2">
+                      {isPreviewReady ? (
+                        <button
+                          type="button"
+                          onClick={() => goToConverter(upload)}
+                          aria-label="Konvertera"
+                          title="Konvertera"
+                          className="rounded-none border border-[#d8d2c8] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
+                        >
+                          Konvertera
+                        </button>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#7b746a]">
+                          <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+                          Laddar...
+                        </span>
+                      )}
+                      {canDelete ? (
+                        <label className="inline-flex items-center">
+                          <input
+                            type="checkbox"
+                            checked={isMarked}
+                            onChange={() => toggleUploadSelection(upload.id)}
+                            disabled={isDeletingSelected}
+                            className="h-5 w-5 rounded border-[#b7aea1] text-[#8b7355] focus:ring-[#8b7355]"
+                          />
+                        </label>
+                      ) : null}
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-center bg-[#f0ece6] p-4">

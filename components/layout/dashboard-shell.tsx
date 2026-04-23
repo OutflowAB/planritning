@@ -20,16 +20,25 @@ import { supabase } from "@/lib/supabase";
 
 type DashboardShellProps = {
   children: ReactNode;
+  variant?: "default" | "admin";
 };
 
 type SidebarIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
-const sidebarItems = [
+const defaultSidebarItems = [
   { label: "Startsida", href: "/startsida", icon: Squares2X2Icon },
   { label: "Verktyg", href: "/verktyg", icon: WrenchScrewdriverIcon },
   { label: "Planritningar", href: "/planritningar", icon: BuildingOffice2Icon },
   { label: "Uppladdningar", href: "/uppladdningar", icon: ArrowUpTrayIcon },
   { label: "Fakturering", href: "/fakturering", icon: CreditCardIcon },
+] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
+
+const adminSidebarItems = [
+  { label: "Dashboard", href: "/admin/dashboard", icon: Squares2X2Icon },
+  { label: "Verktyg", href: "/admin/verktyg", icon: WrenchScrewdriverIcon },
+  { label: "Planritningar", href: "/admin/planritningar", icon: BuildingOffice2Icon },
+  { label: "Uppladdningar", href: "/admin/uppladdningar", icon: ArrowUpTrayIcon },
+  { label: "Fakturering", href: "/admin/fakturering", icon: CreditCardIcon },
 ] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
 
 const settingsItem = {
@@ -38,12 +47,19 @@ const settingsItem = {
   icon: Cog6ToothIcon,
 } as const satisfies { label: string; href: string; icon: SidebarIcon };
 
+const adminSettingsItem = {
+  label: "Inställningar",
+  href: "/admin/installningar",
+  icon: Cog6ToothIcon,
+} as const satisfies { label: string; href: string; icon: SidebarIcon };
+
 const IMAGE_GENERATION_COST_SEK = 80;
-const GENERATION_EVENTS_TABLE = "generation_events";
+const UPLOADS_TABLE = "uploaded_images";
+const GENERATED_UPLOADS_PREFIX = "generated/";
 const GENERATION_EVENTS_EVENT = "generation_events";
 const LEGACY_GENERATION_EVENT = "generation-updated";
 
-export function DashboardShell({ children }: DashboardShellProps) {
+export function DashboardShell({ children, variant = "default" }: DashboardShellProps) {
   const router = useRouter();
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -58,7 +74,9 @@ export function DashboardShell({ children }: DashboardShellProps) {
   );
 
   const imageGenerationTotalCost = imageGenerationCount * IMAGE_GENERATION_COST_SEK;
-  const mobileNavItems = [...sidebarItems, settingsItem] as const;
+  const sidebarItems = variant === "admin" ? adminSidebarItems : defaultSidebarItems;
+  const activeSettingsItem = variant === "admin" ? adminSettingsItem : settingsItem;
+  const mobileNavItems = [...sidebarItems, activeSettingsItem] as const;
 
   const loadGenerationStats = useCallback(async () => {
     const now = new Date();
@@ -70,8 +88,9 @@ export function DashboardShell({ children }: DashboardShellProps) {
     ).toISOString();
 
     const { count, error } = await supabase
-      .from(GENERATION_EVENTS_TABLE)
+      .from(UPLOADS_TABLE)
       .select("id", { count: "exact", head: true })
+      .like("file_path", `${GENERATED_UPLOADS_PREFIX}%`)
       .gte("created_at", monthStart)
       .lt("created_at", monthEnd);
 
@@ -101,13 +120,24 @@ export function DashboardShell({ children }: DashboardShellProps) {
     };
   }, [loadGenerationStats]);
 
-  function handleLogout() {
+  async function handleLogout() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // Ignore network errors and still clear local auth.
+    }
+
     setAuthenticated(false);
     router.replace("/login");
   }
 
   function isActivePath(href: string) {
-    if (href === "/startsida" || href === "/verktyg" || href === "/installningar") {
+    const exactMatchPaths =
+      variant === "admin"
+        ? ["/admin/dashboard", "/admin/verktyg", "/admin/installningar"]
+        : ["/startsida", "/verktyg", "/installningar"];
+
+    if (exactMatchPaths.includes(href)) {
       return pathname === href;
     }
 
@@ -180,15 +210,15 @@ export function DashboardShell({ children }: DashboardShellProps) {
             ))}
 
             <Link
-              href={settingsItem.href}
+              href={activeSettingsItem.href}
               className={`mt-auto inline-flex w-full items-center gap-2 rounded-none px-3 py-4 text-left text-sm font-medium transition ${
-                pathname === settingsItem.href
+                pathname === activeSettingsItem.href
                   ? "bg-white/20 text-white"
                   : "text-white/85 hover:bg-white/10 hover:text-white"
               }`}
             >
-              <settingsItem.icon className="h-4 w-4" aria-hidden="true" />
-              <span>{settingsItem.label}</span>
+              <activeSettingsItem.icon className="h-4 w-4" aria-hidden="true" />
+              <span>{activeSettingsItem.label}</span>
             </Link>
 
             <section className="mt-2 mb-2 border-t border-white/20 pt-4">

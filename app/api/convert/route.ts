@@ -18,6 +18,7 @@ const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
 const GENERATION_EVENTS_TABLE = "generation_events";
 const GENERATED_PREFIX = "generated/";
+const UPLOADS_PREFIX = "uploads/";
 
 export const runtime = "nodejs";
 
@@ -48,10 +49,87 @@ async function insertGenerationEvent(supabase: ReturnType<typeof createSupabaseS
   return error ?? null;
 }
 
+async function resolveSourceUploadId(
+  supabase: ReturnType<typeof createSupabaseServerClient>,
+  uploadedFile: File,
+  inputBuffer: Buffer<ArrayBuffer>,
+  sourceImageIdValue: FormDataEntryValue | null,
+) {
+  const sourceImageIdCandidate =
+    typeof sourceImageIdValue === "string" && sourceImageIdValue.trim().length > 0
+      ? Number(sourceImageIdValue)
+      : Number.NaN;
+
+  if (Number.isFinite(sourceImageIdCandidate)) {
+    const { data: existingSource, error: sourceLookupError } = await supabase
+      .from(UPLOADS_TABLE)
+      .select("id")
+      .eq("id", sourceImageIdCandidate)
+      .single();
+
+    if (sourceLookupError || !existingSource?.id) {
+      return {
+        sourceUploadId: null,
+        sourceUploadError: "Källbilden kunde inte hittas. Välj bilden igen.",
+      };
+    }
+
+    return {
+      sourceUploadId: existingSource.id,
+      sourceUploadError: null,
+    };
+  }
+
+  const extension =
+    uploadedFile.name.split(".").pop()?.toLowerCase() ||
+    uploadedFile.type.split("/").pop()?.toLowerCase() ||
+    "jpg";
+  const sourceStoragePath = `${UPLOADS_PREFIX}${Date.now()}-${crypto.randomUUID()}.${extension}`;
+
+  const { error: sourceStorageError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .upload(sourceStoragePath, inputBuffer, {
+      upsert: false,
+      contentType: uploadedFile.type,
+    });
+
+  if (sourceStorageError) {
+    return {
+      sourceUploadId: null,
+      sourceUploadError: "Kunde inte spara originalbilden.",
+    };
+  }
+
+  const { data: insertedSource, error: sourceInsertError } = await supabase
+    .from(UPLOADS_TABLE)
+    .insert({
+      file_name: uploadedFile.name,
+      file_path: sourceStoragePath,
+      file_size: inputBuffer.byteLength,
+      mime_type: uploadedFile.type || null,
+    })
+    .select("id")
+    .single();
+
+  if (sourceInsertError || !insertedSource?.id) {
+    await supabase.storage.from(BUCKET_NAME).remove([sourceStoragePath]);
+    return {
+      sourceUploadId: null,
+      sourceUploadError: "Kunde inte spara metadata för originalbilden.",
+    };
+  }
+
+  return {
+    sourceUploadId: insertedSource.id,
+    sourceUploadError: null,
+  };
+}
+
 export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const uploadedFile = formData.get("file");
+    const sourceImageIdValue = formData.get("sourceImageId");
 
     if (!(uploadedFile instanceof File)) {
       return NextResponse.json({ message: "Ingen bildfil skickades." }, { status: 400 });
@@ -173,6 +251,16 @@ export async function POST(request: Request) {
       .toBuffer();
 
     const supabase = createSupabaseServerClient();
+    const { sourceUploadId, sourceUploadError } = await resolveSourceUploadId(
+      supabase,
+      uploadedFile,
+      inputBuffer,
+      sourceImageIdValue,
+    );
+    if (!sourceUploadId || sourceUploadError) {
+      return NextResponse.json({ message: sourceUploadError ?? "Kunde inte spara källbild." }, { status: 400 });
+    }
+
     const uniqueGeneratedName = `${Date.now()}-${crypto.randomUUID()}.png`;
     const storagePath = `${GENERATED_PREFIX}${uniqueGeneratedName}`;
     const generatedFileName = buildGeneratedFileName(uploadedFile.name);
@@ -194,6 +282,7 @@ export async function POST(request: Request) {
         file_path: storagePath,
         file_size: outputBuffer.byteLength,
         mime_type: "image/png",
+        source_upload_id: sourceUploadId,
       })
       .select("id, file_path")
       .single();
@@ -220,6 +309,7 @@ export async function POST(request: Request) {
         "Cache-Control": "no-store",
         ...(savedImageUrl ? { "X-Saved-Image-Url": savedImageUrl } : {}),
         ...(insertedImage?.id ? { "X-Saved-Image-Id": String(insertedImage.id) } : {}),
+        "X-Source-Image-Id": String(sourceUploadId),
         "X-Saved-Image-Path": storagePath,
       },
     });

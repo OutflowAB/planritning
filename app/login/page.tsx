@@ -4,7 +4,15 @@ import Image from "next/image";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { isAuthenticated, setAuthenticated } from "@/lib/auth";
+import { getStoredRole, isAuthenticated, setAuthenticated, type UserRole } from "@/lib/auth";
+
+function getRedirectPathByRole(role: UserRole | null): string {
+  if (role === "admin") {
+    return "/admin/dashboard";
+  }
+
+  return "/startsida";
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -15,7 +23,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (isAuthenticated()) {
-      router.replace("/startsida");
+      router.replace(getRedirectPathByRole(getStoredRole()));
     }
   }, [router]);
 
@@ -33,15 +41,17 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       });
 
+      const data = (await response.json()) as { message?: string; role?: UserRole };
+
       if (!response.ok) {
-        const data = (await response.json()) as { message?: string };
         setError(data.message ?? "Inloggning misslyckades.");
         setAuthenticated(false);
         return;
       }
 
-      setAuthenticated(true);
-      router.replace("/startsida");
+      const role = data.role === "admin" ? "admin" : "user";
+      setAuthenticated(true, role);
+      router.replace(getRedirectPathByRole(role));
     } catch {
       setError("Ett oväntat fel uppstod. Försök igen.");
       setAuthenticated(false);
@@ -79,7 +89,7 @@ export default function LoginPage() {
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               required
-              className="w-full rounded-md border border-white/20 bg-neutral-400 px-3 py-2 text-sm text-neutral-900 outline-none ring-0 transition focus:border-white/60"
+              className="w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/60 outline-none ring-0 transition focus:border-white/60"
             />
           </div>
 
@@ -96,7 +106,7 @@ export default function LoginPage() {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               required
-              className="w-full rounded-md border border-white/20 bg-neutral-400 px-3 py-2 text-sm text-neutral-900 outline-none ring-0 transition focus:border-white/60"
+              className="w-full rounded-md border border-white/20 bg-white/10 px-3 py-2 text-sm text-white placeholder:text-white/60 outline-none ring-0 transition focus:border-white/60"
             />
           </div>
 
