@@ -1,19 +1,20 @@
 "use client";
 
 import Image from "next/image";
-import Link from "next/link";
-import { Download, Minus, Plus, RotateCcw, X } from "lucide-react";
+import { Check, Loader2, Minus, Plus, RotateCcw, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ChangeEvent, DragEvent, TouchEvent, WheelEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { ImageCompareSlider } from "@/components/dashboard/image-compare-slider";
 import { createAlignedCompareImage, parseCompareLayoutFromHeaders } from "@/lib/floorplan-compare-layout";
+import {
+  CONVERTER_TRANSFER_KEY,
+  hasPendingConverterTransfer,
+  markStartsidaConverterForReset,
+} from "@/lib/startsida-converter-session";
 import { supabase } from "@/lib/supabase";
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
-const SOURCE_PREVIEW_CACHE_KEY = "floorplan-source-preview-v1";
-const SOURCE_PREVIEW_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
-const CONVERTER_TRANSFER_KEY = "converter-selected-upload-v1";
 const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
 const UPLOADS_PREFIX = "uploads/";
@@ -22,12 +23,15 @@ const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
-
-type ProcessingStatus = "idle" | "uploading" | "processing" | "error";
-type SourcePreviewCachePayload = {
-  dataUrl: string;
-  expiresAt: number;
-};
+// TODO: tillfälligt 1s — återställ till 10_000
+const PROCESSING_MIN_DURATION_MS = 1_000;
+const PROCESSING_STEPS = [
+  "Laddar upp bild",
+  "Analyserar planritning",
+  "Identifierar väggar och rum",
+  "Förbättrar linjer och kontrast",
+  "Genererar slutresultat",
+] as const;
 
 type ConverterTransferPayload = {
   previewUrl: string;
@@ -35,75 +39,87 @@ type ConverterTransferPayload = {
   uploadId?: number;
 };
 
-function statusLabel(status: ProcessingStatus): string {
-  if (status === "uploading") {
-    return "Laddar upp...";
+function waitForMinimumProcessingDuration(startedAt: number) {
+  const elapsed = Date.now() - startedAt;
+  const remaining = Math.max(0, PROCESSING_MIN_DURATION_MS - elapsed);
+  if (remaining === 0) {
+    return Promise.resolve();
   }
 
-  if (status === "processing") {
-    return "Bearbetar bild...";
-  }
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, remaining);
+  });
+}
 
-  return "";
+type ProcessingViewProps = {
+  stepIndex: number;
+};
+
+function ProcessingView({ stepIndex }: ProcessingViewProps) {
+  const progressPercent = Math.round(((stepIndex + 1) / PROCESSING_STEPS.length) * 100);
+
+  return (
+    <div
+      aria-live="polite"
+      aria-busy="true"
+      className="flex min-h-[420px] flex-col items-center justify-center gap-8 px-6 py-12"
+    >
+      <Loader2 className="h-10 w-10 animate-spin text-[#5c544a]" aria-hidden="true" />
+
+      <div className="w-full max-w-md space-y-6">
+        <div className="space-y-2 text-center">
+          <p className="text-lg font-semibold text-[#4d463f]">Bygger din planritning</p>
+          <p className="text-sm text-[#7b746a]">{PROCESSING_STEPS[stepIndex]}...</p>
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs font-medium text-[#7b746a]">
+            <span>Förlopp</span>
+            <span>{progressPercent}%</span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-none bg-[#e8e2d8]">
+            <div
+              className="h-full bg-[#5c544a] transition-all duration-700 ease-out"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+        </div>
+
+        <ul className="space-y-2.5">
+          {PROCESSING_STEPS.map((step, index) => {
+            const isComplete = index < stepIndex;
+            const isActive = index === stepIndex;
+
+            return (
+              <li
+                key={step}
+                className={`flex items-center gap-2.5 text-sm transition-colors ${
+                  isComplete || isActive ? "text-[#4d463f]" : "text-[#b8aea0]"
+                }`}
+              >
+                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                  {isComplete ? (
+                    <Check size={14} className="text-[#5c544a]" aria-hidden="true" />
+                  ) : isActive ? (
+                    <Loader2 size={14} className="animate-spin text-[#5c544a]" aria-hidden="true" />
+                  ) : (
+                    <span className="h-1.5 w-1.5 rounded-full bg-[#d8d2c8]" aria-hidden="true" />
+                  )}
+                </span>
+                <span className={isActive ? "font-medium" : undefined}>{step}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </div>
+  );
 }
 
 function revokeIfObjectUrl(url: string | null) {
   if (url?.startsWith("blob:")) {
     URL.revokeObjectURL(url);
   }
-}
-
-function readCachedSourcePreview() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const rawCache = window.localStorage.getItem(SOURCE_PREVIEW_CACHE_KEY);
-  if (!rawCache) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(rawCache) as SourcePreviewCachePayload;
-    if (
-      typeof parsed?.dataUrl !== "string" ||
-      typeof parsed?.expiresAt !== "number" ||
-      parsed.expiresAt <= Date.now()
-    ) {
-      window.localStorage.removeItem(SOURCE_PREVIEW_CACHE_KEY);
-      return null;
-    }
-
-    return parsed.dataUrl;
-  } catch {
-    window.localStorage.removeItem(SOURCE_PREVIEW_CACHE_KEY);
-    return null;
-  }
-}
-
-function cacheSourcePreview(dataUrl: string) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const payload: SourcePreviewCachePayload = {
-    dataUrl,
-    expiresAt: Date.now() + SOURCE_PREVIEW_CACHE_TTL_MS,
-  };
-
-  try {
-    window.localStorage.setItem(SOURCE_PREVIEW_CACHE_KEY, JSON.stringify(payload));
-  } catch {
-    // Ignore storage quota errors and continue without cache.
-  }
-}
-
-function clearCachedSourcePreview() {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  window.localStorage.removeItem(SOURCE_PREVIEW_CACHE_KEY);
 }
 
 function peekTransferredSourcePreview() {
@@ -163,22 +179,6 @@ async function resolveUploadTransferPayload(uploadId: number): Promise<Converter
   };
 }
 
-function fileToDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-
-      reject(new Error("Kunde inte läsa filen."));
-    };
-    reader.onerror = () => reject(new Error("Kunde inte läsa filen."));
-    reader.readAsDataURL(file);
-  });
-}
-
 function dataUrlToFile(dataUrl: string) {
   const [header, payload] = dataUrl.split(",");
   if (!header || !payload) {
@@ -234,7 +234,6 @@ export function FloorplanEnhancer() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const hasHydratedInitialSourceRef = useRef(false);
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourcePreviewUrl, setSourcePreviewUrl] = useState<string | null>(null);
   const [alignedSourcePreviewUrl, setAlignedSourcePreviewUrl] = useState<string | null>(null);
@@ -242,10 +241,14 @@ export function FloorplanEnhancer() {
   const [resultPreviewUrl, setResultPreviewUrl] = useState<string | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [status, setStatus] = useState<ProcessingStatus>("idle");
+  const [processingStepIndex, setProcessingStepIndex] = useState(0);
   const [errorMessage, setErrorMessage] = useState("");
-  const [isResultDownloading, setIsResultDownloading] = useState(false);
   const [resultImageId, setResultImageId] = useState<number | null>(null);
+  const [showRejectForm, setShowRejectForm] = useState(false);
+  const [showRejectSentConfirmation, setShowRejectSentConfirmation] = useState(false);
+  const [rejectComment, setRejectComment] = useState("");
+  const [isReviewSubmitting, setIsReviewSubmitting] = useState(false);
+  const rejectSentTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [resultImagePath, setResultImagePath] = useState<string | null>(null);
   const [sourceImageId, setSourceImageId] = useState<number | null>(null);
   const [previewImageType, setPreviewImageType] = useState<"source" | "result" | null>(null);
@@ -262,15 +265,15 @@ export function FloorplanEnhancer() {
       : previewImageType === "result"
         ? resultPreviewUrl
         : null;
-  const savedToLibraryHref =
+  const approvedToolsHref =
     resultImageId || resultImagePath
-      ? `/planritningar?${new URLSearchParams({
+      ? `${pathname.startsWith("/admin") ? "/admin/verktyg" : "/verktyg"}?${new URLSearchParams({
           ...(resultImageId ? { imageId: String(resultImageId), previewImageId: String(resultImageId) } : {}),
           ...(resultImagePath
             ? { imagePath: resultImagePath, previewImagePath: resultImagePath }
             : {}),
         }).toString()}`
-      : "/planritningar";
+      : pathname.startsWith("/admin") ? "/admin/verktyg" : "/verktyg";
 
   const clearFromUploadQuery = useCallback(() => {
     if (!searchParams.has("fromUpload")) {
@@ -315,7 +318,6 @@ export function FloorplanEnhancer() {
         }
 
         setSourceFile(file);
-        void fileToDataUrl(file).then(cacheSourcePreview).catch(() => undefined);
         clearTransferredSourcePreview();
         clearFromUploadQuery();
       } catch {
@@ -331,15 +333,100 @@ export function FloorplanEnhancer() {
     [clearFromUploadQuery],
   );
 
+
   useEffect(() => {
-    if (hasHydratedInitialSourceRef.current) {
+    return () => {
+      revokeIfObjectUrl(sourcePreviewUrl);
+    };
+  }, [sourcePreviewUrl]);
+
+  useEffect(() => {
+    return () => {
+      revokeIfObjectUrl(resultPreviewUrl);
+    };
+  }, [resultPreviewUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (rejectSentTimeoutRef.current) {
+        clearTimeout(rejectSentTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isSubmitting) {
+      setProcessingStepIndex(0);
       return;
     }
 
-    hasHydratedInitialSourceRef.current = true;
+    const stepDuration = PROCESSING_MIN_DURATION_MS / PROCESSING_STEPS.length;
+    const intervalId = window.setInterval(() => {
+      setProcessingStepIndex((previous) =>
+        previous < PROCESSING_STEPS.length - 1 ? previous + 1 : previous,
+      );
+    }, stepDuration);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [isSubmitting]);
+
+  function clearGenerationResult() {
+    setPreviewImageType(null);
+    setPreviewZoom(1);
+    setResultImageId(null);
+    setResultImagePath(null);
+    setShowRejectForm(false);
+    setRejectComment("");
+    setIsReviewSubmitting(false);
+    setAlignedSourcePreviewUrl(null);
+    setResultPreviewUrl((prev) => {
+      revokeIfObjectUrl(prev);
+
+      return null;
+    });
+  }
+
+  function resetResult() {
+    setShowRejectSentConfirmation(false);
+    if (rejectSentTimeoutRef.current) {
+      clearTimeout(rejectSentTimeoutRef.current);
+      rejectSentTimeoutRef.current = null;
+    }
+    clearGenerationResult();
+  }
+
+  function resetSourceSelection() {
+    setErrorMessage("");
+    setIsSubmitting(false);
+    setSourceFile(null);
+    setSourceImageId(null);
+    setIsDragActive(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    setSourcePreviewUrl((prev) => {
+      revokeIfObjectUrl(prev);
+      return null;
+    });
+    resetResult();
+  }
+
+  useEffect(() => {
+    return () => {
+      markStartsidaConverterForReset();
+    };
+  }, []);
+
+  useEffect(() => {
     let isCancelled = false;
 
-    async function hydrateInitialSource() {
+    async function hydrateTransferredSource() {
+      if (!hasPendingConverterTransfer(searchParams.get("fromUpload"))) {
+        return;
+      }
+
       let transferredSource = peekTransferredSourcePreview();
 
       if (!transferredSource) {
@@ -354,71 +441,14 @@ export function FloorplanEnhancer() {
 
       if (transferredSource?.previewUrl) {
         await applyTransferredSource(transferredSource, () => isCancelled);
-        return;
-      }
-
-      const cachedPreview = readCachedSourcePreview();
-      if (!cachedPreview || isCancelled) {
-        return;
-      }
-
-      setSourcePreviewUrl(cachedPreview);
-      setSourceImageId(null);
-      const cachedFile = dataUrlToFile(cachedPreview);
-      if (cachedFile) {
-        setSourceFile(cachedFile);
       }
     }
 
-    void hydrateInitialSource();
+    void hydrateTransferredSource();
     return () => {
       isCancelled = true;
     };
   }, [applyTransferredSource, searchParams]);
-
-  useEffect(() => {
-    return () => {
-      revokeIfObjectUrl(sourcePreviewUrl);
-    };
-  }, [sourcePreviewUrl]);
-
-  useEffect(() => {
-    return () => {
-      revokeIfObjectUrl(resultPreviewUrl);
-    };
-  }, [resultPreviewUrl]);
-
-  function resetResult() {
-    setPreviewImageType(null);
-    setPreviewZoom(1);
-    setResultImageId(null);
-    setResultImagePath(null);
-    setAlignedSourcePreviewUrl(null);
-    setResultPreviewUrl((prev) => {
-      revokeIfObjectUrl(prev);
-
-      return null;
-    });
-    setStatus("idle");
-  }
-
-  function resetSourceSelection() {
-    setErrorMessage("");
-    setIsSubmitting(false);
-    setStatus("idle");
-    setSourceFile(null);
-    setSourceImageId(null);
-    setIsDragActive(false);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-    setSourcePreviewUrl((prev) => {
-      revokeIfObjectUrl(prev);
-      return null;
-    });
-    clearCachedSourcePreview();
-    resetResult();
-  }
 
   function assignFile(file: File | null) {
     if (!file) {
@@ -438,7 +468,6 @@ export function FloorplanEnhancer() {
       return URL.createObjectURL(file);
     });
     resetResult();
-    void fileToDataUrl(file).then(cacheSourcePreview).catch(() => undefined);
   }
 
   function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
@@ -470,7 +499,8 @@ export function FloorplanEnhancer() {
 
     setErrorMessage("");
     setIsSubmitting(true);
-    setStatus("uploading");
+    setProcessingStepIndex(0);
+    const processingStartedAt = Date.now();
 
     try {
       const payload = new FormData();
@@ -479,17 +509,11 @@ export function FloorplanEnhancer() {
         payload.append("sourceImageId", String(sourceImageId));
       }
 
-      const requestPromise = fetch("/api/convert", {
+      const response = await fetch("/api/convert", {
         method: "POST",
         body: payload,
       });
 
-      await new Promise((resolve) => {
-        window.setTimeout(resolve, 250);
-      });
-      setStatus("processing");
-
-      const response = await requestPromise;
       if (!response.ok) {
         const fallbackMessage = "Kunde inte bearbeta bilden. Försök igen.";
         let resolvedMessage = fallbackMessage;
@@ -503,6 +527,8 @@ export function FloorplanEnhancer() {
         }
         throw new Error(resolvedMessage);
       }
+
+      await waitForMinimumProcessingDuration(processingStartedAt);
 
       const savedImageIdHeader = response.headers.get("x-saved-image-id");
       const savedImagePath = response.headers.get("x-saved-image-path");
@@ -542,12 +568,10 @@ export function FloorplanEnhancer() {
 
         return URL.createObjectURL(resultBlob);
       });
-      setStatus("idle");
       window.dispatchEvent(new Event("library-updated"));
       window.dispatchEvent(new Event(GENERATION_EVENTS_EVENT));
       window.dispatchEvent(new Event(LEGACY_GENERATION_EVENT));
     } catch (error) {
-      setStatus("error");
       setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
     } finally {
       setIsSubmitting(false);
@@ -576,41 +600,87 @@ export function FloorplanEnhancer() {
     void processImage(sourceFile);
   }
 
-  async function downloadResultImage() {
-    if (!resultPreviewUrl || isResultDownloading) {
+  async function submitGenerationReview(action: "approve" | "reject") {
+    if (isReviewSubmitting || !resultImageId || !resultImagePath) {
       return;
     }
 
-    setIsResultDownloading(true);
+    const trimmedComment = rejectComment.trim();
+    if (action === "reject" && !trimmedComment) {
+      setErrorMessage("Skriv en kommentar om varför bilden nekas.");
+      return;
+    }
+
+    setErrorMessage("");
+    setIsReviewSubmitting(true);
+
     try {
-      const response = await fetch(resultPreviewUrl, { cache: "no-store" });
+      const response = await fetch("/api/review-generation", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          action,
+          imageId: resultImageId,
+          filePath: resultImagePath,
+          ...(action === "reject" ? { comment: trimmedComment } : {}),
+        }),
+      });
+
       if (!response.ok) {
-        throw new Error("Download failed");
+        const fallbackMessage =
+          action === "approve"
+            ? "Kunde inte godkänna bilden just nu."
+            : "Kunde inte neka bilden just nu.";
+        let resolvedMessage = fallbackMessage;
+        try {
+          const data = (await response.json()) as { message?: string };
+          if (data?.message) {
+            resolvedMessage = data.message;
+          }
+        } catch {
+          // Ignore JSON parse issues and use fallback message.
+        }
+        throw new Error(resolvedMessage);
       }
 
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = "planritning-bearbetad.png";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(objectUrl);
-    } catch {
-      setErrorMessage("Kunde inte ladda ner bilden just nu.");
+      if (action === "approve") {
+        setShowRejectForm(false);
+        setRejectComment("");
+        router.push(approvedToolsHref);
+        return;
+      }
+
+      clearGenerationResult();
+      setShowRejectSentConfirmation(true);
+      window.dispatchEvent(new Event("library-updated"));
+      window.dispatchEvent(new Event(GENERATION_EVENTS_EVENT));
+      window.dispatchEvent(new Event(LEGACY_GENERATION_EVENT));
+
+      if (rejectSentTimeoutRef.current) {
+        clearTimeout(rejectSentTimeoutRef.current);
+      }
+      rejectSentTimeoutRef.current = setTimeout(() => {
+        rejectSentTimeoutRef.current = null;
+        setShowRejectSentConfirmation(false);
+      }, 2500);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
     } finally {
-      setIsResultDownloading(false);
+      setIsReviewSubmitting(false);
     }
   }
 
-  function startNewImageSelection() {
-    if (isSubmitting) {
-      return;
-    }
+  function openRejectForm() {
+    setErrorMessage("");
+    setShowRejectForm(true);
+  }
 
-    resetSourceSelection();
-    fileInputRef.current?.click();
+  function cancelRejectForm() {
+    setShowRejectForm(false);
+    setRejectComment("");
+    setErrorMessage("");
   }
 
   function leavePreview() {
@@ -736,54 +806,45 @@ export function FloorplanEnhancer() {
         onChange={handleFileInputChange}
       />
 
-      {showDropzone ? (
-        <label
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onClick={() => {
-            if (isSubmitting) {
-              return;
-            }
-            fileInputRef.current?.click();
-          }}
-          onKeyDown={(event) => {
-            if (isSubmitting) {
-              return;
-            }
+      {isSubmitting ? (
+        <ProcessingView stepIndex={processingStepIndex} />
+      ) : (
+        <>
+          {showDropzone ? (
+            <label
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onClick={() => {
+                fileInputRef.current?.click();
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
+              tabIndex={0}
+              className={`flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-none border-2 border-dashed px-6 py-8 text-center transition ${
+                isDragActive
+                  ? "border-[#b8aea0] bg-[#f2ede5]"
+                  : "border-[#d8d2c8] bg-[#faf8f4] hover:border-[#b8aea0]"
+              }`}
+            >
+              <p className="text-sm font-medium text-[#5c544a]">
+                Dra och släpp en planritning här, eller klicka för att välja fil.
+              </p>
+              <p className="mt-2 text-xs text-[#7b746a]">Stöd: PNG, JPG, WEBP</p>
+            </label>
+          ) : null}
 
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              fileInputRef.current?.click();
-            }
-          }}
-          tabIndex={0}
-          className={`flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-none border-2 border-dashed px-6 py-8 text-center transition ${
-            isDragActive
-              ? "border-[#b8aea0] bg-[#f2ede5]"
-              : "border-[#d8d2c8] bg-[#faf8f4] hover:border-[#b8aea0]"
-          }`}
-        >
-          <p className="text-sm font-medium text-[#5c544a]">
-            Dra och släpp en planritning här, eller klicka för att välja fil.
-          </p>
-          <p className="mt-2 text-xs text-[#7b746a]">Stöd: PNG, JPG, WEBP</p>
-        </label>
-      ) : null}
+          {errorMessage ? (
+            <p className="rounded-sm border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {errorMessage}
+            </p>
+          ) : null}
 
-      {isSubmitting && statusLabel(status) ? (
-        <p aria-live="polite" className="text-sm font-medium text-[#6a6258]">
-          {statusLabel(status)}
-        </p>
-      ) : null}
-
-      {errorMessage ? (
-        <p className="rounded-sm border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {errorMessage}
-        </p>
-      ) : null}
-
-      {sourcePreviewUrl ? (
+          {sourcePreviewUrl ? (
         <div className="space-y-3">
           {!resultPreviewUrl ? (
             <figure className="mx-auto w-fit max-w-full overflow-hidden rounded-none border border-[#d8d2c8] bg-white">
@@ -820,15 +881,6 @@ export function FloorplanEnhancer() {
                 <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-xs font-semibold text-[#6a6258]">
                   {resultImageId ? `Bild ${resultImageId}` : ""}
                 </span>
-                <button
-                  type="button"
-                  onClick={leavePreview}
-                  disabled={isSubmitting}
-                  aria-label="Lämna bildvy"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <X size={14} aria-hidden="true" />
-                </button>
               </figcaption>
               <ImageCompareSlider
                 beforeSrc={alignedSourcePreviewUrl ?? sourcePreviewUrl}
@@ -842,67 +894,108 @@ export function FloorplanEnhancer() {
           ) : null}
 
           <div className="mx-auto w-full max-w-3xl">
-            <div className="relative mt-1 flex flex-wrap items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={startNewImageSelection}
-                disabled={isSubmitting}
-                className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Ladda upp ny bild
-              </button>
-
-              {resultPreviewUrl ? (
-                <Link
-                  href={savedToLibraryHref}
-                  className="absolute left-1/2 -translate-x-1/2 text-xs font-semibold text-[#6a6258] underline decoration-[#b8aea0] underline-offset-4 transition hover:text-[#4d463f]"
-                >
-                  Bilden har sparats till Planritningar
-                </Link>
-              ) : null}
-
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                {!resultPreviewUrl ? (
-                  <>
-                    {errorMessage ? (
+            <div className="relative mt-1 flex flex-col gap-3">
+              {!resultPreviewUrl ? (
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {showRejectSentConfirmation ? (
+                    <div
+                      aria-live="polite"
+                      className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#d8d2c8] bg-[#f7f4ef] px-3 py-2 text-sm font-medium text-[#4d463f]"
+                    >
+                      Ditt meddelande är skickat.
+                    </div>
+                  ) : (
+                    <>
+                      {errorMessage ? (
+                        <button
+                          type="button"
+                          onClick={startConversion}
+                          disabled={isSubmitting || !sourceFile}
+                          className="rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f7f4ef] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Försök igen
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         onClick={startConversion}
-                        disabled={isSubmitting || !sourceFile}
-                        className="rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f7f4ef] disabled:cursor-not-allowed disabled:opacity-60"
+                        disabled={isSubmitting || isSourceLoading || !sourceFile}
+                        className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        Försök igen
+                        {isSubmitting
+                          ? "Konverterar..."
+                          : isSourceLoading
+                            ? "Laddar bild..."
+                            : "Starta konvertering"}
                       </button>
-                    ) : null}
+                    </>
+                  )}
+                </div>
+              ) : showRejectForm ? (
+                <div className="space-y-3">
+                  <p className="text-sm font-medium text-[#5c544a]">
+                    Berätta varför bilden nekas så att vi kan förbättra resultatet.
+                  </p>
+                  <textarea
+                    value={rejectComment}
+                    onChange={(event) => setRejectComment(event.target.value)}
+                    rows={3}
+                    placeholder="Skriv din kommentar här..."
+                    disabled={isReviewSubmitting}
+                    className="w-full resize-y rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm text-[#4d463f] outline-none transition focus:border-[#b8aea0] disabled:cursor-not-allowed disabled:opacity-60"
+                  />
+                  <div className="flex flex-wrap items-center justify-end gap-2">
                     <button
                       type="button"
-                      onClick={startConversion}
-                      disabled={isSubmitting || isSourceLoading || !sourceFile}
+                      onClick={cancelRejectForm}
+                      disabled={isReviewSubmitting}
+                      className="rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Avbryt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void submitGenerationReview("reject")}
+                      disabled={isReviewSubmitting || !rejectComment.trim()}
                       className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {isSubmitting
-                        ? "Konverterar..."
-                        : isSourceLoading
-                          ? "Laddar bild..."
-                          : "Starta konvertering"}
+                      {isReviewSubmitting ? "Skickar..." : "Skicka"}
                     </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => void downloadResultImage()}
-                    disabled={isResultDownloading}
-                    className="inline-flex min-w-[157px] items-center justify-center gap-1.5 rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <Download size={14} aria-hidden="true" />
-                    {isResultDownloading ? "Laddar..." : "Ladda ner"}
-                  </button>
-                )}
-              </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-center text-sm font-medium text-[#5c544a]">
+                    Godkänner du den bearbetade bilden?
+                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={openRejectForm}
+                      disabled={isReviewSubmitting}
+                      className="inline-flex min-w-[157px] items-center justify-center gap-1.5 rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Nej
+                      <X size={14} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void submitGenerationReview("approve")}
+                      disabled={isReviewSubmitting}
+                      className="inline-flex min-w-[157px] items-center justify-center gap-1.5 rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isReviewSubmitting ? "Sparar..." : "Godkänn"}
+                      <Check size={14} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
       ) : null}
+        </>
+      )}
 
       {previewImageType && activePreviewImageUrl ? (
         <div

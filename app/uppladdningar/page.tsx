@@ -668,22 +668,13 @@ export default function UppladdningarPage() {
                       {new Date(upload.created_at).toLocaleString("sv-SE")}
                     </p>
                     <div className="ml-auto flex items-center gap-2">
-                      {isPreviewReady ? (
-                        <button
-                          type="button"
-                          onClick={() => goToConverter(upload)}
-                          aria-label="Konvertera"
-                          title="Konvertera"
-                          className="rounded-none border border-[#d8d2c8] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
-                        >
-                          Konvertera
-                        </button>
-                      ) : (
+                      <p className="text-xs font-semibold text-[#6a6258]">Bild {upload.id}</p>
+                      {!isPreviewReady ? (
                         <span className="inline-flex items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-2.5 py-1.5 text-xs font-semibold text-[#7b746a]">
                           <Loader2 size={12} className="animate-spin" aria-hidden="true" />
                           Laddar...
                         </span>
-                      )}
+                      ) : null}
                       {canDelete ? (
                         <label className="inline-flex items-center">
                           <input
@@ -858,6 +849,7 @@ export default function UppladdningarPage() {
               </div>
 
               <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-[#6a6258]">Bild {previewImage.id}</span>
                 <button
                   type="button"
                   onClick={() => void downloadPreviewImage()}
@@ -878,7 +870,7 @@ export default function UppladdningarPage() {
               </div>
             </div>
 
-            <div className="flex-1 overflow-auto bg-[#f0ece6] p-4">
+            <div className="relative flex-1 overflow-auto bg-[#f0ece6] p-4">
               <div className="mx-auto flex min-h-full w-full items-center justify-center">
                 <div
                   className="touch-none select-none"
@@ -893,11 +885,23 @@ export default function UppladdningarPage() {
                     alt={previewImage.file_name}
                     width={2200}
                     height={1600}
-                    className="h-auto max-h-[calc(90vh-190px)] w-auto max-w-full border border-[#d8d2c8] bg-white object-contain transition-transform duration-150"
+                    className="h-auto max-h-[calc(90vh-250px)] w-auto max-w-full border border-[#d8d2c8] bg-white object-contain transition-transform duration-150"
                     style={{ transform: `scale(${previewZoom})`, transformOrigin: "center center" }}
                   />
                 </div>
               </div>
+            </div>
+
+            <div className="flex items-center justify-end border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+              <button
+                type="button"
+                onClick={() => goToConverter(previewImage)}
+                aria-label="Konvertera"
+                title="Konvertera"
+                className="rounded-none border border-[#d8d2c8] bg-white px-4 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
+              >
+                Konvertera
+              </button>
             </div>
           </div>
         </div>

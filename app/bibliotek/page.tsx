@@ -7,6 +7,7 @@ import { TouchEvent, WheelEvent, useEffect, useRef, useState } from "react";
 
 import { getStoredRole } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { buildVerktygHref, getPendingVerktygSave } from "@/lib/verktyg-save-session";
 
 const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
@@ -386,8 +387,9 @@ export default function BibliotekPage() {
 
     const { data, error: queryError } = await supabase
       .from(UPLOADS_TABLE)
-      .select("id, file_name, file_path, file_size, mime_type, created_at")
+      .select("id, file_name, file_path, file_size, mime_type, created_at, saved_at")
       .like("file_path", `${GENERATED_PREFIX}%`)
+      .not("saved_at", "is", null)
       .order("created_at", { ascending: false });
 
     if (queryError) {
@@ -454,6 +456,15 @@ export default function BibliotekPage() {
     writeLibraryListCache(rowsWithPreview);
     setIsLoading(false);
   }
+
+  useEffect(() => {
+    const pendingSave = getPendingVerktygSave();
+    if (!pendingSave) {
+      return;
+    }
+
+    router.replace(buildVerktygHref(pathname, pendingSave));
+  }, [pathname, router]);
 
   useEffect(() => {
     const shouldForceRefresh =
