@@ -311,6 +311,14 @@ export async function POST(request: Request) {
         ...(insertedImage?.id ? { "X-Saved-Image-Id": String(insertedImage.id) } : {}),
         "X-Source-Image-Id": String(sourceUploadId),
         "X-Saved-Image-Path": storagePath,
+        "X-Layout-Canvas-Width": String(canvasWidth),
+        "X-Layout-Canvas-Height": String(canvasHeight),
+        "X-Layout-Image-X": String(imageX),
+        "X-Layout-Image-Y": String(imageY),
+        "X-Layout-Image-Width": String(imageWidth),
+        "X-Layout-Image-Height": String(imageHeight),
+        "X-Layout-Frame-Inset": String(OUTER_FRAME_INSET_PX),
+        "X-Layout-Frame-Stroke": String(OUTER_FRAME_STROKE_PX),
       },
     });
   } catch (error) {

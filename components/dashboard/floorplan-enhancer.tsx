@@ -3,12 +3,20 @@
 import Image from "next/image";
 import Link from "next/link";
 import { Download, Minus, Plus, RotateCcw, X } from "lucide-react";
-import { ChangeEvent, DragEvent, TouchEvent, WheelEvent, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { ChangeEvent, DragEvent, TouchEvent, WheelEvent, useCallback, useEffect, useRef, useState } from "react";
+
+import { ImageCompareSlider } from "@/components/dashboard/image-compare-slider";
+import { createAlignedCompareImage, parseCompareLayoutFromHeaders } from "@/lib/floorplan-compare-layout";
+import { supabase } from "@/lib/supabase";
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const SOURCE_PREVIEW_CACHE_KEY = "floorplan-source-preview-v1";
 const SOURCE_PREVIEW_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const CONVERTER_TRANSFER_KEY = "converter-selected-upload-v1";
+const BUCKET_NAME = "planritningar";
+const UPLOADS_TABLE = "uploaded_images";
+const UPLOADS_PREFIX = "uploads/";
 const GENERATION_EVENTS_EVENT = "generation_events";
 const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
@@ -98,7 +106,7 @@ function clearCachedSourcePreview() {
   window.localStorage.removeItem(SOURCE_PREVIEW_CACHE_KEY);
 }
 
-function readTransferredSourcePreview() {
+function peekTransferredSourcePreview() {
   if (typeof window === "undefined") {
     return null;
   }
@@ -107,8 +115,6 @@ function readTransferredSourcePreview() {
   if (!rawPayload) {
     return null;
   }
-
-  window.sessionStorage.removeItem(CONVERTER_TRANSFER_KEY);
 
   try {
     const parsed = JSON.parse(rawPayload) as ConverterTransferPayload;
@@ -120,6 +126,41 @@ function readTransferredSourcePreview() {
   } catch {
     return null;
   }
+}
+
+function clearTransferredSourcePreview() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.sessionStorage.removeItem(CONVERTER_TRANSFER_KEY);
+}
+
+async function resolveUploadTransferPayload(uploadId: number): Promise<ConverterTransferPayload | null> {
+  const { data, error } = await supabase
+    .from(UPLOADS_TABLE)
+    .select("id, file_name, file_path, mime_type")
+    .eq("id", uploadId)
+    .like("file_path", `${UPLOADS_PREFIX}%`)
+    .single();
+
+  if (error || !data?.file_path || !data.mime_type?.startsWith("image/")) {
+    return null;
+  }
+
+  const { data: signedData, error: signError } = await supabase.storage
+    .from(BUCKET_NAME)
+    .createSignedUrl(data.file_path, 3600);
+
+  if (signError || !signedData?.signedUrl) {
+    return null;
+  }
+
+  return {
+    previewUrl: signedData.signedUrl,
+    fileName: data.file_name,
+    uploadId: data.id,
+  };
 }
 
 function fileToDataUrl(file: File) {
@@ -190,8 +231,14 @@ function extractStoragePathFromSignedUrl(signedUrl: string | null) {
 }
 
 export function FloorplanEnhancer() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const hasHydratedInitialSourceRef = useRef(false);
   const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [sourcePreviewUrl, setSourcePreviewUrl] = useState<string | null>(null);
+  const [alignedSourcePreviewUrl, setAlignedSourcePreviewUrl] = useState<string | null>(null);
+  const [isSourceLoading, setIsSourceLoading] = useState(false);
   const [resultPreviewUrl, setResultPreviewUrl] = useState<string | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -225,43 +272,89 @@ export function FloorplanEnhancer() {
         }).toString()}`
       : "/planritningar";
 
+  const clearFromUploadQuery = useCallback(() => {
+    if (!searchParams.has("fromUpload")) {
+      return;
+    }
+
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("fromUpload");
+    const queryString = params.toString();
+    router.replace(queryString ? `${pathname}?${queryString}` : pathname, { scroll: false });
+  }, [pathname, router, searchParams]);
+
+  const applyTransferredSource = useCallback(
+    async (transferredSource: ConverterTransferPayload, isCancelled: () => boolean) => {
+      setIsSourceLoading(true);
+      setErrorMessage("");
+      setSourceImageId(
+        typeof transferredSource.uploadId === "number" ? transferredSource.uploadId : null,
+      );
+      setSourcePreviewUrl((previous) => {
+        revokeIfObjectUrl(previous);
+        return transferredSource.previewUrl;
+      });
+
+      try {
+        const response = await fetch(transferredSource.previewUrl, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("Kunde inte hämta vald bild.");
+        }
+
+        const blob = await response.blob();
+        const file = new File(
+          [blob],
+          transferredSource.fileName ?? "planritning-fran-uppladdningar.jpg",
+          {
+            type: blob.type || "image/jpeg",
+          },
+        );
+
+        if (isCancelled()) {
+          return;
+        }
+
+        setSourceFile(file);
+        void fileToDataUrl(file).then(cacheSourcePreview).catch(() => undefined);
+        clearTransferredSourcePreview();
+        clearFromUploadQuery();
+      } catch {
+        if (!isCancelled()) {
+          setErrorMessage("Kunde inte hämta vald bild från uppladdningar. Försök igen.");
+        }
+      } finally {
+        if (!isCancelled()) {
+          setIsSourceLoading(false);
+        }
+      }
+    },
+    [clearFromUploadQuery],
+  );
+
   useEffect(() => {
+    if (hasHydratedInitialSourceRef.current) {
+      return;
+    }
+
+    hasHydratedInitialSourceRef.current = true;
     let isCancelled = false;
 
     async function hydrateInitialSource() {
-      const transferredSource = readTransferredSourcePreview();
-      if (transferredSource?.previewUrl) {
-        try {
-          const response = await fetch(transferredSource.previewUrl, { cache: "no-store" });
-          if (!response.ok) {
-            throw new Error("Kunde inte hämta vald bild.");
-          }
+      let transferredSource = peekTransferredSourcePreview();
 
-          const blob = await response.blob();
-          const file = new File([blob], transferredSource.fileName ?? "planritning-fran-uppladdningar.jpg", {
-            type: blob.type || "image/jpeg",
-          });
-          const objectUrl = URL.createObjectURL(file);
+      if (!transferredSource) {
+        const fromUploadParam = searchParams.get("fromUpload");
+        const fromUploadId =
+          fromUploadParam && !Number.isNaN(Number(fromUploadParam)) ? Number(fromUploadParam) : null;
 
-          if (isCancelled) {
-            URL.revokeObjectURL(objectUrl);
-            return;
-          }
-
-          setErrorMessage("");
-          setSourceFile(file);
-          setSourceImageId(
-            typeof transferredSource.uploadId === "number" ? transferredSource.uploadId : null,
-          );
-          setSourcePreviewUrl((prev) => {
-            revokeIfObjectUrl(prev);
-            return objectUrl;
-          });
-          void fileToDataUrl(file).then(cacheSourcePreview).catch(() => undefined);
-          return;
-        } catch {
-          // Fall back to cached source if transfer fetch fails.
+        if (fromUploadId) {
+          transferredSource = await resolveUploadTransferPayload(fromUploadId);
         }
+      }
+
+      if (transferredSource?.previewUrl) {
+        await applyTransferredSource(transferredSource, () => isCancelled);
+        return;
       }
 
       const cachedPreview = readCachedSourcePreview();
@@ -281,7 +374,7 @@ export function FloorplanEnhancer() {
     return () => {
       isCancelled = true;
     };
-  }, []);
+  }, [applyTransferredSource, searchParams]);
 
   useEffect(() => {
     return () => {
@@ -300,6 +393,7 @@ export function FloorplanEnhancer() {
     setPreviewZoom(1);
     setResultImageId(null);
     setResultImagePath(null);
+    setAlignedSourcePreviewUrl(null);
     setResultPreviewUrl((prev) => {
       revokeIfObjectUrl(prev);
 
@@ -427,6 +521,17 @@ export function FloorplanEnhancer() {
       }
       setResultImageId(parsedSavedImageId);
       setResultImagePath(savedImagePath ?? extractStoragePathFromSignedUrl(savedImageUrl));
+      const compareLayout = parseCompareLayoutFromHeaders(response.headers);
+      if (compareLayout) {
+        try {
+          const alignedPreview = await createAlignedCompareImage(file, compareLayout);
+          setAlignedSourcePreviewUrl(alignedPreview);
+        } catch {
+          setAlignedSourcePreviewUrl(null);
+        }
+      } else {
+        setAlignedSourcePreviewUrl(null);
+      }
       const resultBlob = await response.blob();
       setResultPreviewUrl((prev) => {
         revokeIfObjectUrl(prev);
@@ -706,10 +811,12 @@ export function FloorplanEnhancer() {
             </figure>
           ) : null}
 
-          {resultPreviewUrl ? (
-            <figure className="mx-auto w-fit max-w-full overflow-hidden rounded-none border border-[#d8d2c8] bg-white">
+          {resultPreviewUrl && sourcePreviewUrl ? (
+            <figure className="mx-auto w-fit max-w-full overflow-hidden rounded-none border border-[#d8d2c8] bg-white leading-none">
               <figcaption className="relative flex items-center justify-between gap-3 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-[#7b746a]">Resultat</span>
+                <span className="text-xs font-semibold uppercase tracking-wide text-[#7b746a]">
+                  Före / Efter
+                </span>
                 <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-xs font-semibold text-[#6a6258]">
                   {resultImageId ? `Bild ${resultImageId}` : ""}
                 </span>
@@ -723,14 +830,13 @@ export function FloorplanEnhancer() {
                   <X size={14} aria-hidden="true" />
                 </button>
               </figcaption>
-              <Image
-                src={resultPreviewUrl}
-                alt="Bearbetad planritning"
-                width={1200}
-                height={1200}
-                unoptimized
+              <ImageCompareSlider
+                beforeSrc={alignedSourcePreviewUrl ?? sourcePreviewUrl}
+                afterSrc={resultPreviewUrl}
+                beforeAlt="Original planritning"
+                afterAlt="Bearbetad planritning"
                 onClick={openResultPreview}
-                className="h-auto w-auto max-h-[min(60vh,640px)] max-w-full cursor-zoom-in bg-white"
+                className="cursor-zoom-in"
               />
             </figure>
           ) : null}
@@ -771,10 +877,14 @@ export function FloorplanEnhancer() {
                     <button
                       type="button"
                       onClick={startConversion}
-                      disabled={isSubmitting || (!sourceFile && !sourcePreviewUrl)}
+                      disabled={isSubmitting || isSourceLoading || !sourceFile}
                       className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {isSubmitting ? "Konverterar..." : "Starta konvertering"}
+                      {isSubmitting
+                        ? "Konverterar..."
+                        : isSourceLoading
+                          ? "Laddar bild..."
+                          : "Starta konvertering"}
                     </button>
                   </>
                 ) : (

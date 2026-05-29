@@ -185,7 +185,9 @@ export default function UppladdningarPage() {
       window.sessionStorage.setItem(CONVERTER_TRANSFER_KEY, JSON.stringify(payload));
     }
 
-    router.push(converterPath);
+    const params = new URLSearchParams();
+    params.set("fromUpload", String(upload.id));
+    router.push(`${converterPath}?${params.toString()}`);
   }
 
   function closeImagePreview() {
