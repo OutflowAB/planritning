@@ -107,23 +107,16 @@ export function configureCanvasToolMode(
 }
 
 export function createEraserStrokeFromPath(path: Path): EraserStrokeObject {
-  const serialized = path.toObject() as Record<string, unknown> & {
-    path: TComplexPathData;
-  };
-  const { type: _type, version: _version, ...fabricState } = serialized;
-
   return {
     id: crypto.randomUUID(),
     type: "eraserStroke",
     x: path.left ?? 0,
     y: path.top ?? 0,
     rotation: path.angle ?? 0,
-    scaleX: path.scaleX ?? 1,
-    scaleY: path.scaleY ?? 1,
+    scaleX: 1,
+    scaleY: 1,
     path: (path.path ?? []) as TComplexPathData,
-    strokeWidth:
-      typeof path.strokeWidth === "number" ? path.strokeWidth : SM_EDITOR.eraserBrushWidth,
-    fabricState,
+    strokeWidth: SM_EDITOR.eraserBrushWidth,
   };
 }
 
@@ -467,29 +460,12 @@ export function createFabricObjectFromFloorplan(object: FloorplanObject): Fabric
       return group;
     }
 
-    case "eraserStroke": {
-      const eraser = object as EraserStrokeObject;
-      if (eraser.fabricState) {
-        return new Path(eraser.path, {
-          ...eraser.fabricState,
-          ...ERASER_STROKE_PROPS,
-          strokeWidth: eraser.strokeWidth,
-          selectable: !object.locked,
-          evented: !object.locked,
-          visible: object.visible ?? true,
-          data: {
-            floorplanId: object.id,
-            floorplanType: object.type,
-          } satisfies FloorplanFabricMeta,
-        });
-      }
-
+    case "eraserStroke":
       return new Path(object.path, {
         ...common,
         ...ERASER_STROKE_PROPS,
         strokeWidth: object.strokeWidth,
       });
-    }
 
     default:
       return new Rect({

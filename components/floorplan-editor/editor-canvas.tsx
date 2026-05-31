@@ -11,7 +11,6 @@ import { SM_EDITOR } from "@/lib/sm-floorplan-layout";
 
 type EditorCanvasProps = {
   controller: FloorplanEditorController;
-  onPaintStateChange?: (isPainting: boolean) => void;
 };
 
 const CANVAS_PADDING_PX = 24;
@@ -88,7 +87,7 @@ type EraserCursorState = {
   visible: boolean;
 };
 
-export function EditorCanvas({ controller, onPaintStateChange }: EditorCanvasProps) {
+export function EditorCanvas({ controller }: EditorCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
   const canvasWrapperRef = useRef<HTMLDivElement>(null);
@@ -441,13 +440,11 @@ export function EditorCanvas({ controller, onPaintStateChange }: EditorCanvasPro
       displaySize.height <= 0 ||
       !currentController.canvasRef.current
     ) {
-      onPaintStateChange?.(true);
       return;
     }
 
     let active = true;
     const generation = ++paintGenerationRef.current;
-    onPaintStateChange?.(true);
 
     async function paint() {
       currentController.applyDisplayScale(displaySize);
@@ -461,7 +458,6 @@ export function EditorCanvas({ controller, onPaintStateChange }: EditorCanvasPro
         configureCanvasSelectionStyle(canvas);
         configureCanvasToolMode(canvas, currentController.activeTool);
       }
-      onPaintStateChange?.(false);
     }
 
     void paint();
@@ -476,7 +472,6 @@ export function EditorCanvas({ controller, onPaintStateChange }: EditorCanvasPro
     controller.document?.canvas.width,
     displaySize.height,
     displaySize.width,
-    onPaintStateChange,
   ]);
 
   if (!controller.document) {

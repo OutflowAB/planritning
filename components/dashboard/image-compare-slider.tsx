@@ -20,13 +20,31 @@ type ImageCompareSliderProps = {
 
 const IMAGE_CLASS_NAME = "block h-auto w-auto max-h-[min(60vh,640px)] max-w-full bg-white";
 
+const loadedCompareImageSrcs = new Set<string>();
+
 function preloadImage(src: string) {
+  if (loadedCompareImageSrcs.has(src)) {
+    return Promise.resolve();
+  }
+
   return new Promise<void>((resolve, reject) => {
     const image = new window.Image();
-    image.onload = () => resolve();
+    image.onload = () => {
+      loadedCompareImageSrcs.add(src);
+      resolve();
+    };
     image.onerror = () => reject(new Error("Kunde inte ladda jämförelsebilden."));
     image.src = src;
   });
+}
+
+export function warmCompareImageSrc(src: string) {
+  void preloadImage(src).catch(() => undefined);
+}
+
+export function warmCompareImageCache(beforeSrc: string, afterSrc: string) {
+  warmCompareImageSrc(beforeSrc);
+  warmCompareImageSrc(afterSrc);
 }
 
 export function ImageCompareSlider({
@@ -43,7 +61,9 @@ export function ImageCompareSlider({
   const [position, setPosition] = useState(50);
   const [renderedSize, setRenderedSize] = useState({ width: 0, height: 0 });
   const [isTransitionEnabled, setIsTransitionEnabled] = useState(false);
-  const [imagesReady, setImagesReady] = useState(false);
+  const [imagesReady, setImagesReady] = useState(
+    () => loadedCompareImageSrcs.has(afterSrc) && loadedCompareImageSrcs.has(beforeSrc),
+  );
   const isDraggingRef = useRef(false);
   const didDragRef = useRef(false);
 
@@ -66,10 +86,15 @@ export function ImageCompareSlider({
 
   useEffect(() => {
     let cancelled = false;
-    setImagesReady(false);
-    setPosition(50);
-    setIsTransitionEnabled(false);
-    setRenderedSize({ width: 0, height: 0 });
+    const bothCached =
+      loadedCompareImageSrcs.has(afterSrc) && loadedCompareImageSrcs.has(beforeSrc);
+
+    if (!bothCached) {
+      setImagesReady(false);
+      setPosition(50);
+      setIsTransitionEnabled(false);
+      setRenderedSize({ width: 0, height: 0 });
+    }
 
     void Promise.all([preloadImage(afterSrc), preloadImage(beforeSrc)])
       .then(() => {
@@ -96,7 +121,7 @@ export function ImageCompareSlider({
     const revealTimer = window.setTimeout(() => {
       setIsTransitionEnabled(true);
       setPosition(0);
-    }, 300);
+    }, loadedCompareImageSrcs.has(afterSrc) && loadedCompareImageSrcs.has(beforeSrc) ? 0 : 300);
 
     return () => window.clearTimeout(revealTimer);
   }, [imagesReady, beforeSrc, afterSrc]);

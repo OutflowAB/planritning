@@ -105,8 +105,6 @@ export type EraserStrokeObject = FloorplanObjectBase & {
   type: "eraserStroke";
   path: TComplexPathData;
   strokeWidth: number;
-  /** Fabric Path props from toObject() — krävs för korrekt återgivning efter zoom/undo. */
-  fabricState?: Record<string, unknown>;
 };
 
 export type FloorplanObject =

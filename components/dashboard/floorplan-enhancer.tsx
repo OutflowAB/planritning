@@ -17,7 +17,11 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-import { ImageCompareSlider } from "@/components/dashboard/image-compare-slider";
+import {
+  ImageCompareSlider,
+  warmCompareImageCache,
+  warmCompareImageSrc,
+} from "@/components/dashboard/image-compare-slider";
 import {
   preventImageContextMenu,
   WatermarkOverlay,
@@ -364,42 +368,6 @@ function ComparePreviewSkeleton() {
   );
 }
 
-function preloadCompareImages(beforeSrc: string, afterSrc: string) {
-  return new Promise<void>((resolve, reject) => {
-    const afterImage = new window.Image();
-    const beforeImage = new window.Image();
-    let afterLoaded = false;
-    let beforeLoaded = false;
-    let failed = false;
-
-    function finishLoad() {
-      if (afterLoaded && beforeLoaded) {
-        resolve();
-      }
-    }
-
-    function handleError() {
-      if (!failed) {
-        failed = true;
-        reject(new Error("Kunde inte ladda jämförelsebilden."));
-      }
-    }
-
-    afterImage.onload = () => {
-      afterLoaded = true;
-      finishLoad();
-    };
-    beforeImage.onload = () => {
-      beforeLoaded = true;
-      finishLoad();
-    };
-    afterImage.onerror = handleError;
-    beforeImage.onerror = handleError;
-    afterImage.src = afterSrc;
-    beforeImage.src = beforeSrc;
-  });
-}
-
 function extractStoragePathFromSignedUrl(signedUrl: string | null) {
   if (!signedUrl) {
     return null;
@@ -454,7 +422,6 @@ export function FloorplanEnhancer() {
   const [sourceImageId, setSourceImageId] = useState<number | null>(null);
   const [previewImageType, setPreviewImageType] = useState<"source" | "result" | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
-  const [isComparePreviewReady, setIsComparePreviewReady] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const pinchStartDistanceRef = useRef<number | null>(null);
@@ -564,7 +531,6 @@ export function FloorplanEnhancer() {
     clearPendingGenerationReview();
     setPreviewImageType(null);
     setPreviewZoom(1);
-    setIsComparePreviewReady(false);
     setResultImageId(null);
     setResultImagePath(null);
     setShowRejectForm(false);
@@ -610,8 +576,18 @@ export function FloorplanEnhancer() {
   }, []);
 
   useLayoutEffect(() => {
-    if (!hasPendingGenerationReview()) {
+    const pendingReview = getPendingGenerationReview();
+    if (!pendingReview) {
       setHasRestoredPendingReview(true);
+      return;
+    }
+
+    setResultImageId(pendingReview.resultImageId);
+    setResultImagePath(pendingReview.resultImagePath);
+    setSourceImageId(pendingReview.sourceImageId);
+    if (pendingReview.compareBeforePreviewUrl) {
+      setAlignedSourcePreviewUrl(pendingReview.compareBeforePreviewUrl);
+      warmCompareImageSrc(pendingReview.compareBeforePreviewUrl);
     }
   }, []);
 
@@ -665,11 +641,14 @@ export function FloorplanEnhancer() {
             sourcePayload.fileName,
           ));
         setAlignedSourcePreviewUrl(restoredComparePreview);
-        if (restoredComparePreview && !pendingReview.compareBeforePreviewUrl) {
-          setPendingGenerationReview({
-            ...pendingReview,
-            compareBeforePreviewUrl: restoredComparePreview,
-          });
+        if (restoredComparePreview) {
+          warmCompareImageCache(restoredComparePreview, signedResult.data.signedUrl);
+          if (!pendingReview.compareBeforePreviewUrl) {
+            setPendingGenerationReview({
+              ...pendingReview,
+              compareBeforePreviewUrl: restoredComparePreview,
+            });
+          }
         }
       } catch {
         if (!isCancelled) {
@@ -692,37 +671,15 @@ export function FloorplanEnhancer() {
 
   const isRestoringPendingReview = isPendingGenerationReview && !hasRestoredPendingReview;
   const isRestoringPendingSource = hasPendingSourceSelection() && !hasRestoredPendingSource;
+  const showGenerationReview =
+    Boolean(resultPreviewUrl && sourcePreviewUrl) || isRestoringPendingReview;
   const isComparePreviewLoading =
-    Boolean(resultPreviewUrl && sourcePreviewUrl) &&
-    (!alignedSourcePreviewUrl || !isComparePreviewReady);
+    showGenerationReview && (!resultPreviewUrl || !sourcePreviewUrl || !alignedSourcePreviewUrl);
 
   useEffect(() => {
-    if (!alignedSourcePreviewUrl || !resultPreviewUrl) {
-      setIsComparePreviewReady(false);
-      return;
+    if (alignedSourcePreviewUrl && resultPreviewUrl) {
+      warmCompareImageCache(alignedSourcePreviewUrl, resultPreviewUrl);
     }
-
-    let cancelled = false;
-    setIsComparePreviewReady(false);
-
-    void preloadCompareImages(alignedSourcePreviewUrl, resultPreviewUrl)
-      .then(() => {
-        if (!cancelled) {
-          setIsComparePreviewReady(true);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setIsComparePreviewReady(false);
-          setErrorMessage(
-            error instanceof Error ? error.message : "Kunde inte ladda jämförelsebilden.",
-          );
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
   }, [alignedSourcePreviewUrl, resultPreviewUrl]);
 
   useEffect(() => {
@@ -935,14 +892,13 @@ export function FloorplanEnhancer() {
         new Blob([compareBeforePng], { type: "image/png" }),
       );
       setAlignedSourcePreviewUrl(compareBeforeDataUrl);
+      const nextResultPreviewUrl = savedImageUrl
+        ? savedImageUrl
+        : URL.createObjectURL(new Blob([resultPng], { type: "image/png" }));
+      warmCompareImageCache(compareBeforeDataUrl, nextResultPreviewUrl);
       setResultPreviewUrl((prev) => {
         revokeIfObjectUrl(prev);
-
-        if (savedImageUrl) {
-          return savedImageUrl;
-        }
-
-        return URL.createObjectURL(new Blob([resultPng], { type: "image/png" }));
+        return nextResultPreviewUrl;
       });
       if (parsedSavedImageId && savedImagePath && parsedSourceImageId) {
         clearPendingSourceSelection();
@@ -1249,7 +1205,7 @@ export function FloorplanEnhancer() {
     return () => document.removeEventListener("keydown", handleEscape);
   }, [previewImageType, showApproveDestinationModal, isReviewSubmitting]);
 
-  if (isRestoringPendingReview || isRestoringPendingSource) {
+  if (isRestoringPendingSource && !showGenerationReview) {
     return <ConverterLoadingShell />;
   }
 
@@ -1410,7 +1366,7 @@ export function FloorplanEnhancer() {
             </figure>
           ) : null}
 
-          {resultPreviewUrl && sourcePreviewUrl ? (
+          {showGenerationReview ? (
             <figure
               className={`mx-auto overflow-hidden rounded-none border border-[#d8d2c8] bg-white leading-none ${
                 isComparePreviewLoading ? "w-full max-w-3xl" : "w-fit max-w-full"
@@ -1426,7 +1382,7 @@ export function FloorplanEnhancer() {
               </figcaption>
               {isComparePreviewLoading ? (
                 <ComparePreviewSkeleton />
-              ) : alignedSourcePreviewUrl ? (
+              ) : alignedSourcePreviewUrl && resultPreviewUrl ? (
                 <ImageCompareSlider
                   beforeSrc={alignedSourcePreviewUrl}
                   afterSrc={resultPreviewUrl}
@@ -1450,7 +1406,7 @@ export function FloorplanEnhancer() {
                     disabled={isReviewSubmitting}
                     className="w-full resize-y rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm text-[#4d463f] outline-none transition focus:border-[#b8aea0] disabled:cursor-not-allowed disabled:opacity-60"
                   />
-                  <div className="flex flex-wrap items-center justify-end gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <button
                       type="button"
                       onClick={cancelRejectForm}
