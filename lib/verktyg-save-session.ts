@@ -70,6 +70,10 @@ export function buildVerktygHref(
   return `${basePath}?${params.toString()}`;
 }
 
+export function buildVerktygListHref(pathname: string) {
+  return pathname.startsWith("/admin") ? "/admin/verktyg" : "/verktyg";
+}
+
 export function buildPlanritningarHref(
   pathname: string,
   payload: Pick<PendingVerktygSave, "imageId"> & { imagePath?: string },

@@ -3,7 +3,12 @@
 import { useRouter } from "next/navigation";
 import { ReactNode, useEffect, useState } from "react";
 
-import { getStoredRole, isAuthenticated, type UserRole } from "@/lib/auth";
+import {
+  getStoredRole,
+  isAuthenticated,
+  setAuthenticated as clearAuthState,
+  type UserRole,
+} from "@/lib/auth";
 
 type ProtectedRouteProps = {
   children: ReactNode;
@@ -15,11 +20,40 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function verifySession() {
+      if (!isAuthenticated()) {
+        if (!cancelled) {
+          setAuthenticated(false);
+        }
+        return;
+      }
+
+      try {
+        const response = await fetch("/api/auth/session", { credentials: "include" });
+        const data = (await response.json()) as { role?: string | null };
+        if (!cancelled) {
+          if (!data.role) {
+            clearAuthState(false);
+          }
+          setAuthenticated(Boolean(data.role));
+        }
+      } catch {
+        if (!cancelled) {
+          setAuthenticated(isAuthenticated());
+        }
+      }
+    }
+
     const timer = window.setTimeout(() => {
-      setAuthenticated(isAuthenticated());
+      void verifySession();
     }, 0);
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {

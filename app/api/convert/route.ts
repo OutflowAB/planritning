@@ -3,6 +3,9 @@ import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import path from "node:path";
 
+import { COMPARE_RESPONSE_CONTENT_TYPE, packCompareResponse } from "@/lib/floorplan-compare-layout";
+import { cropToMainContent } from "@/lib/image/smart-crop";
+
 const TARGET_MAX_WIDTH = 1200;
 const LINE_THRESHOLD = 190;
 const ASPECT_RATIO_WIDTH = 7;
@@ -141,16 +144,23 @@ export async function POST(request: Request) {
 
     const inputBuffer = Buffer.from(await uploadedFile.arrayBuffer());
 
-    const processedImageBuffer = await sharp(inputBuffer)
+    const orientedColorBuffer = await sharp(inputBuffer)
       .rotate()
       .resize({
         width: TARGET_MAX_WIDTH,
         withoutEnlargement: true,
       })
+      .png()
+      .toBuffer();
+
+    const thresholdedImageBuffer = await sharp(orientedColorBuffer)
       .grayscale()
       .threshold(LINE_THRESHOLD)
       .png()
       .toBuffer();
+
+    const cropResult = await cropToMainContent(thresholdedImageBuffer);
+    const processedImageBuffer = cropResult.buffer;
 
     const processedMetadata = await sharp(processedImageBuffer).metadata();
     const imageWidth = processedMetadata.width;
@@ -250,6 +260,34 @@ export async function POST(request: Request) {
       .png()
       .toBuffer();
 
+    const croppedOriginalBuffer = await sharp(orientedColorBuffer)
+      .extract({
+        left: cropResult.boundingBox.left,
+        top: cropResult.boundingBox.top,
+        width: cropResult.boundingBox.width,
+        height: cropResult.boundingBox.height,
+      })
+      .png()
+      .toBuffer();
+
+    const compareBeforeBuffer = await sharp({
+      create: {
+        width: canvasWidth,
+        height: canvasHeight,
+        channels: 4,
+        background: { r: 255, g: 255, b: 255, alpha: 1 },
+      },
+    })
+      .composite([
+        {
+          input: croppedOriginalBuffer,
+          left: imageX,
+          top: imageY,
+        },
+      ])
+      .png()
+      .toBuffer();
+
     const supabase = createSupabaseServerClient();
     const { sourceUploadId, sourceUploadError } = await resolveSourceUploadId(
       supabase,
@@ -302,10 +340,15 @@ export async function POST(request: Request) {
     const { data: signedImageData } = await supabase.storage.from(BUCKET_NAME).createSignedUrl(storagePath, 3600);
     const savedImageUrl = signedImageData?.signedUrl ?? null;
 
-    return new Response(new Uint8Array(outputBuffer), {
+    const packedBody = packCompareResponse(
+      new Uint8Array(compareBeforeBuffer),
+      new Uint8Array(outputBuffer),
+    );
+
+    return new Response(packedBody, {
       status: 200,
       headers: {
-        "Content-Type": "image/png",
+        "Content-Type": COMPARE_RESPONSE_CONTENT_TYPE,
         "Cache-Control": "no-store",
         ...(savedImageUrl ? { "X-Saved-Image-Url": savedImageUrl } : {}),
         ...(insertedImage?.id ? { "X-Saved-Image-Id": String(insertedImage.id) } : {}),
@@ -317,6 +360,12 @@ export async function POST(request: Request) {
         "X-Layout-Image-Y": String(imageY),
         "X-Layout-Image-Width": String(imageWidth),
         "X-Layout-Image-Height": String(imageHeight),
+        "X-Layout-Crop-Left": String(cropResult.boundingBox.left),
+        "X-Layout-Crop-Top": String(cropResult.boundingBox.top),
+        "X-Layout-Crop-Width": String(cropResult.boundingBox.width),
+        "X-Layout-Crop-Height": String(cropResult.boundingBox.height),
+        "X-Layout-Prepared-Width": String(cropResult.preparedWidth),
+        "X-Layout-Prepared-Height": String(cropResult.preparedHeight),
         "X-Layout-Frame-Inset": String(OUTER_FRAME_INSET_PX),
         "X-Layout-Frame-Stroke": String(OUTER_FRAME_STROKE_PX),
       },

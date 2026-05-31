@@ -1,22 +1,19 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { createClient } from "@supabase/supabase-js";
+
+import { deleteUploadRecord } from "@/lib/delete-upload";
+import { createUnauthorizedResponse, getRequestRole } from "@/lib/server-auth";
 
 type DeleteBody = {
   id?: number;
   filePath?: string;
 };
 
-type CascadedRow = {
-  file_path: string;
-};
-
 export async function POST(request: Request) {
-  const cookieStore = await cookies();
-  const role = cookieStore.get("sm_auth_role")?.value;
-
-  if (role !== "admin") {
-    return NextResponse.json({ message: "Saknar behörighet." }, { status: 403 });
+  const role = await getRequestRole();
+  if (!role) {
+    const unauthorized = createUnauthorizedResponse();
+    return NextResponse.json(unauthorized.body, { status: unauthorized.status });
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -41,45 +38,10 @@ export async function POST(request: Request) {
     },
   });
 
-  const { data: cascadedRows, error: cascadedRowsError } = await adminSupabase
-    .from("uploaded_images")
-    .select("file_path")
-    .eq("source_upload_id", id)
-    .like("file_path", "generated/%");
-
-  if (cascadedRowsError) {
-    return NextResponse.json(
-      { message: `Kunde inte läsa kopplade genereringar: ${cascadedRowsError.message}` },
-      { status: 500 },
-    );
-  }
-
-  const { data: deletedRows, error: deleteError } = await adminSupabase
-    .from("uploaded_images")
-    .delete()
-    .eq("id", id)
-    .eq("file_path", filePath)
-    .select("id");
-
-  if (deleteError) {
-    return NextResponse.json({ message: `Kunde inte radera post: ${deleteError.message}` }, { status: 500 });
-  }
-
-  if (!deletedRows || deletedRows.length === 0) {
-    return NextResponse.json({ message: "Bilden hittades inte eller är redan borttagen." }, { status: 404 });
-  }
-
-  const cascadePaths = ((cascadedRows as CascadedRow[] | null) ?? [])
-    .map((row) => row.file_path)
-    .filter(Boolean);
-  const uniquePaths = Array.from(new Set([filePath, ...cascadePaths]));
-
-  const { error: storageError } = await adminSupabase.storage.from("planritningar").remove(uniquePaths);
-  if (storageError) {
-    return NextResponse.json(
-      { message: `Posten raderades men filen kunde inte tas bort: ${storageError.message}` },
-      { status: 500 },
-    );
+  const result = await deleteUploadRecord(adminSupabase, id, filePath);
+  if (!result.ok) {
+    const status = result.message.includes("hittades inte") ? 404 : 500;
+    return NextResponse.json({ message: result.message }, { status });
   }
 
   return NextResponse.json({ success: true });

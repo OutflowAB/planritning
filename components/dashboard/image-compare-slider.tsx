@@ -1,7 +1,11 @@
 "use client";
 
-import Image from "next/image";
-import { PointerEvent, useCallback, useEffect, useRef, useState } from "react";
+import { PointerEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
+
+import {
+  preventImageContextMenu,
+  WatermarkOverlay,
+} from "@/components/dashboard/watermark-overlay";
 
 type ImageCompareSliderProps = {
   beforeSrc: string;
@@ -10,9 +14,20 @@ type ImageCompareSliderProps = {
   afterAlt?: string;
   className?: string;
   onClick?: () => void;
+  protectAfterImage?: boolean;
+  loadingFallback?: ReactNode;
 };
 
 const IMAGE_CLASS_NAME = "block h-auto w-auto max-h-[min(60vh,640px)] max-w-full bg-white";
+
+function preloadImage(src: string) {
+  return new Promise<void>((resolve, reject) => {
+    const image = new window.Image();
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("Kunde inte ladda jämförelsebilden."));
+    image.src = src;
+  });
+}
 
 export function ImageCompareSlider({
   beforeSrc,
@@ -21,11 +36,14 @@ export function ImageCompareSlider({
   afterAlt = "Resultat",
   className = "",
   onClick,
+  protectAfterImage = false,
+  loadingFallback = null,
 }: ImageCompareSliderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState(50);
   const [renderedSize, setRenderedSize] = useState({ width: 0, height: 0 });
   const [isTransitionEnabled, setIsTransitionEnabled] = useState(false);
+  const [imagesReady, setImagesReady] = useState(false);
   const isDraggingRef = useRef(false);
   const didDragRef = useRef(false);
 
@@ -35,8 +53,8 @@ export function ImageCompareSlider({
       return;
     }
 
-    const afterImage = element.querySelector<HTMLElement>("[data-compare-after='true']");
-    if (!afterImage) {
+    const afterImage = element.querySelector<HTMLImageElement>("[data-compare-after='true']");
+    if (!afterImage || afterImage.offsetWidth <= 0) {
       return;
     }
 
@@ -47,8 +65,45 @@ export function ImageCompareSlider({
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    setImagesReady(false);
+    setPosition(50);
+    setIsTransitionEnabled(false);
+    setRenderedSize({ width: 0, height: 0 });
+
+    void Promise.all([preloadImage(afterSrc), preloadImage(beforeSrc)])
+      .then(() => {
+        if (!cancelled) {
+          setImagesReady(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setImagesReady(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [beforeSrc, afterSrc]);
+
+  useEffect(() => {
+    if (!imagesReady) {
+      return;
+    }
+
+    const revealTimer = window.setTimeout(() => {
+      setIsTransitionEnabled(true);
+      setPosition(0);
+    }, 300);
+
+    return () => window.clearTimeout(revealTimer);
+  }, [imagesReady, beforeSrc, afterSrc]);
+
+  useEffect(() => {
     const element = containerRef.current;
-    if (!element) {
+    if (!element || !imagesReady) {
       return;
     }
 
@@ -56,22 +111,10 @@ export function ImageCompareSlider({
     const observer = new ResizeObserver(syncRenderedSize);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [syncRenderedSize, beforeSrc, afterSrc]);
-
-  useEffect(() => {
-    setPosition(50);
-    setIsTransitionEnabled(false);
-
-    const revealTimer = window.setTimeout(() => {
-      setIsTransitionEnabled(true);
-      setPosition(0);
-    }, 700);
-
-    return () => window.clearTimeout(revealTimer);
-  }, [beforeSrc, afterSrc]);
+  }, [imagesReady, syncRenderedSize, beforeSrc, afterSrc]);
 
   const transitionStyle = isTransitionEnabled
-    ? { transition: "width 1.1s ease-in-out, left 1.1s ease-in-out" }
+    ? { transition: "width 0.8s ease-in-out, left 0.8s ease-in-out" }
     : undefined;
 
   const updatePositionFromClientX = useCallback((clientX: number) => {
@@ -119,32 +162,43 @@ export function ImageCompareSlider({
     onClick?.();
   }
 
+  if (!imagesReady) {
+    return loadingFallback ?? (
+      <div
+        className="flex min-h-[min(60vh,640px)] w-full items-center justify-center bg-[#f0ece6]"
+        aria-busy="true"
+        aria-live="polite"
+      />
+    );
+  }
+
   return (
     <div
       ref={containerRef}
-      className={`relative block w-fit max-w-full touch-none select-none overflow-hidden bg-white leading-none ${className}`}
+      className={`relative mx-auto block w-fit max-w-full touch-none select-none overflow-hidden bg-white leading-none ${className}`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       onClick={handleClick}
+      onContextMenu={protectAfterImage ? preventImageContextMenu : undefined}
       role="slider"
       aria-label="Jämför original och resultat"
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(position)}
     >
-      <Image
-        src={afterSrc}
-        alt={afterAlt}
-        width={1200}
-        height={1200}
-        unoptimized
-        draggable={false}
-        data-compare-after="true"
-        onLoad={syncRenderedSize}
-        className={IMAGE_CLASS_NAME}
-      />
+      <div className="relative w-fit max-w-full">
+        <img
+          src={afterSrc}
+          alt={afterAlt}
+          draggable={false}
+          data-compare-after="true"
+          onLoad={syncRenderedSize}
+          className={IMAGE_CLASS_NAME}
+        />
+        {protectAfterImage ? <WatermarkOverlay /> : null}
+      </div>
 
       <div
         className="absolute inset-y-0 left-0 overflow-hidden"
@@ -158,12 +212,9 @@ export function ImageCompareSlider({
             height: renderedSize.height > 0 ? renderedSize.height : "100%",
           }}
         >
-          <Image
+          <img
             src={beforeSrc}
             alt={beforeAlt}
-            width={1200}
-            height={1200}
-            unoptimized
             draggable={false}
             onLoad={syncRenderedSize}
             className="absolute left-0 top-0 max-w-none"

@@ -1,3 +1,5 @@
+import type { TComplexPathData } from "fabric";
+
 export const FLOORPLAN_DOCUMENT_VERSION = 1 as const;
 
 export type FloorplanObjectType =
@@ -9,7 +11,8 @@ export type FloorplanObjectType =
   | "stair"
   | "symbol"
   | "icon"
-  | "furniture";
+  | "furniture"
+  | "eraserStroke";
 
 export type FloorplanTransform = {
   x: number;
@@ -61,6 +64,7 @@ export type DoorObject = FloorplanObjectBase & {
 export type WindowObject = FloorplanObjectBase & {
   type: "window";
   width: number;
+  height: number;
   strokeWidth: number;
 };
 
@@ -97,6 +101,14 @@ export type FurnitureObject = FloorplanObjectBase & {
   stroke: string;
 };
 
+export type EraserStrokeObject = FloorplanObjectBase & {
+  type: "eraserStroke";
+  path: TComplexPathData;
+  strokeWidth: number;
+  /** Fabric Path props from toObject() — krävs för korrekt återgivning efter zoom/undo. */
+  fabricState?: Record<string, unknown>;
+};
+
 export type FloorplanObject =
   | WallObject
   | RoomLabelObject
@@ -106,7 +118,8 @@ export type FloorplanObject =
   | StairObject
   | SymbolObject
   | IconObject
-  | FurnitureObject;
+  | FurnitureObject
+  | EraserStrokeObject;
 
 export type FloorplanCanvasMeta = {
   width: number;
@@ -130,6 +143,7 @@ export type FloorplanDocument = {
 
 export type EditorTool =
   | "select"
+  | "eraser"
   | "wall"
   | "roomLabel"
   | "dimension"

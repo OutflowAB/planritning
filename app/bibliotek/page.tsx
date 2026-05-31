@@ -1,13 +1,17 @@
 "use client";
 
 import Image from "next/image";
-import { Download, Loader2, Minus, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { ChevronDown, Download, Loader2, Minus, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { TouchEvent, WheelEvent, useEffect, useRef, useState } from "react";
 
 import { getStoredRole } from "@/lib/auth";
+import {
+  exportLibraryFloorplan,
+  type LibraryExportFormat,
+} from "@/lib/floorplan/export-library";
 import { supabase } from "@/lib/supabase";
-import { buildVerktygHref, getPendingVerktygSave } from "@/lib/verktyg-save-session";
+import { buildVerktygHref, setPendingVerktygSave } from "@/lib/verktyg-save-session";
 
 const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
@@ -21,6 +25,12 @@ const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
+const DOWNLOAD_FORMATS: Array<{ format: LibraryExportFormat; label: string }> = [
+  { format: "svg", label: "SVG" },
+  { format: "pdf", label: "PDF" },
+  { format: "jpg", label: "JPG" },
+  { format: "jpeg", label: "JPEG" },
+];
 
 type GeneratedImageRow = {
   id: number;
@@ -134,7 +144,11 @@ export default function BibliotekPage() {
   const [selectedImageIds, setSelectedImageIds] = useState<number[]>([]);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [isPreviewDownloading, setIsPreviewDownloading] = useState(false);
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false);
+  const [downloadingFormat, setDownloadingFormat] = useState<LibraryExportFormat | null>(null);
   const [isDeletingSelected, setIsDeletingSelected] = useState(false);
+  const [isSendingToVerktyg, setIsSendingToVerktyg] = useState(false);
+  const downloadMenuRef = useRef<HTMLDivElement | null>(null);
   const pinchStartDistanceRef = useRef<number | null>(null);
   const pinchStartZoomRef = useRef<number>(1);
   const selectedImageId = searchParams.get("imageId");
@@ -189,6 +203,7 @@ export default function BibliotekPage() {
 
   function closeImagePreview() {
     setPreviewZoom(1);
+    setShowDownloadMenu(false);
     setQueryParams({
       previewImageId: undefined,
       previewImagePath: undefined,
@@ -263,31 +278,73 @@ export default function BibliotekPage() {
     });
   }
 
-  async function downloadPreviewImage() {
-    if (!previewImage?.preview_url) {
+  async function downloadPreviewImage(format: LibraryExportFormat) {
+    if (!previewImage) {
       return;
     }
 
     setIsPreviewDownloading(true);
-    try {
-      const response = await fetch(previewImage.preview_url, { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error("Download failed");
-      }
+    setDownloadingFormat(format);
+    setLoadError("");
 
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = previewImage.file_name || "planritning";
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(objectUrl);
+    try {
+      await exportLibraryFloorplan({
+        imageId: previewImage.id,
+        imagePath: previewImage.file_path,
+        fileName: previewImage.file_name,
+        format,
+        fallbackUrl: previewImage.preview_url,
+      });
+      setShowDownloadMenu(false);
     } catch {
       setLoadError("Kunde inte ladda ner bilden just nu.");
     } finally {
       setIsPreviewDownloading(false);
+      setDownloadingFormat(null);
+    }
+  }
+
+  async function sendBackToVerktyg() {
+    if (!previewImage || isSendingToVerktyg) {
+      return;
+    }
+
+    setIsSendingToVerktyg(true);
+    setLoadError("");
+
+    try {
+      const response = await fetch("/api/unsave-generation", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          imageId: previewImage.id,
+          filePath: previewImage.file_path,
+        }),
+      });
+      const data = (await response.json()) as { message?: string };
+
+      if (!response.ok) {
+        throw new Error(data.message ?? "Kunde inte skicka tillbaka till verktyg.");
+      }
+
+      setPendingVerktygSave({
+        imageId: previewImage.id,
+        imagePath: previewImage.file_path,
+      });
+      window.dispatchEvent(new Event("library-updated"));
+      router.push(
+        buildVerktygHref(pathname, {
+          imageId: previewImage.id,
+          imagePath: previewImage.file_path,
+        }),
+      );
+    } catch (error) {
+      setLoadError(
+        error instanceof Error ? error.message : "Kunde inte skicka tillbaka till verktyg.",
+      );
+      setIsSendingToVerktyg(false);
     }
   }
 
@@ -458,15 +515,6 @@ export default function BibliotekPage() {
   }
 
   useEffect(() => {
-    const pendingSave = getPendingVerktygSave();
-    if (!pendingSave) {
-      return;
-    }
-
-    router.replace(buildVerktygHref(pathname, pendingSave));
-  }, [pathname, router]);
-
-  useEffect(() => {
     const shouldForceRefresh =
       Boolean(previewImageId) ||
       Boolean(previewImagePath) ||
@@ -507,16 +555,47 @@ export default function BibliotekPage() {
       return;
     }
     setPreviewZoom(1);
+    setShowDownloadMenu(false);
+  }, [previewImage]);
+
+  useEffect(() => {
+    if (!previewImage) {
+      return;
+    }
 
     function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        closeImagePreview();
+      if (event.key !== "Escape") {
+        return;
       }
+
+      setShowDownloadMenu((isOpen) => {
+        if (isOpen) {
+          return false;
+        }
+
+        closeImagePreview();
+        return false;
+      });
     }
 
     document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
   }, [previewImage]);
+
+  useEffect(() => {
+    if (!showDownloadMenu) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      if (!downloadMenuRef.current?.contains(event.target as Node)) {
+        setShowDownloadMenu(false);
+      }
+    }
+
+    document.addEventListener("click", handlePointerDown);
+    return () => document.removeEventListener("click", handlePointerDown);
+  }, [showDownloadMenu]);
 
   return (
     <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
@@ -644,11 +723,11 @@ export default function BibliotekPage() {
           role="presentation"
         >
           <div
-            className="relative flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-none border border-[#d8d2c8] bg-white shadow-[0_12px_40px_rgba(0,0,0,0.35)]"
+            className="relative flex max-h-[90vh] w-full max-w-6xl flex-col rounded-none border border-[#d8d2c8] bg-white shadow-[0_12px_40px_rgba(0,0,0,0.35)]"
             onClick={(event) => event.stopPropagation()}
             role="presentation"
           >
-            <div className="relative flex flex-wrap items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
+            <div className="relative z-20 flex flex-wrap items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
               <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-xs font-semibold text-[#6a6258]">
                 Bild {previewImage.id}
               </div>
@@ -674,27 +753,60 @@ export default function BibliotekPage() {
                 >
                   <Plus size={15} aria-hidden="true" />
                 </button>
-                <button
-                  type="button"
-                  onClick={resetPreviewZoom}
-                  aria-label="Återställ zoom"
-                  className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-2 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
-                >
-                  <RotateCcw size={13} aria-hidden="true" />
-                  Reset
-                </button>
+                {previewZoom !== 1 ? (
+                  <button
+                    type="button"
+                    onClick={resetPreviewZoom}
+                    aria-label="Återställ zoom"
+                    className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-2 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
+                  >
+                    <RotateCcw size={13} aria-hidden="true" />
+                    Reset
+                  </button>
+                ) : null}
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void downloadPreviewImage()}
-                  disabled={isPreviewDownloading}
-                  className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-2 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <Download size={13} aria-hidden="true" />
-                  {isPreviewDownloading ? "Laddar..." : "Ladda ner"}
-                </button>
+                <div className="relative inline-block" ref={downloadMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setShowDownloadMenu((previous) => !previous)}
+                    disabled={isPreviewDownloading}
+                    aria-expanded={showDownloadMenu}
+                    aria-haspopup="menu"
+                    className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-2 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <Download size={13} aria-hidden="true" />
+                    {isPreviewDownloading ? "Laddar..." : "Ladda ner"}
+                    <ChevronDown size={13} aria-hidden="true" />
+                  </button>
+
+                  {showDownloadMenu ? (
+                    <div
+                      role="menu"
+                      aria-label="Välj filformat"
+                      className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-none border border-[#d8d2c8] bg-white"
+                    >
+                      {DOWNLOAD_FORMATS.map(({ format, label }, index) => (
+                        <button
+                          key={format}
+                          type="button"
+                          role="menuitem"
+                          disabled={isPreviewDownloading}
+                          onClick={() => void downloadPreviewImage(format)}
+                          className={`flex h-8 w-full items-center justify-between px-2 text-left text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60 ${
+                            index < DOWNLOAD_FORMATS.length - 1 ? "border-b border-[#d8d2c8]" : ""
+                          }`}
+                        >
+                          <span>{label}</span>
+                          {downloadingFormat === format ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
                 <button
                   type="button"
                   onClick={closeImagePreview}
@@ -726,6 +838,17 @@ export default function BibliotekPage() {
                   />
                 </div>
               </div>
+            </div>
+
+            <div className="flex items-center border-t border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
+              <button
+                type="button"
+                onClick={() => void sendBackToVerktyg()}
+                disabled={isSendingToVerktyg}
+                className="inline-flex h-8 items-center rounded-none border border-[#d8d2c8] bg-white px-3 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSendingToVerktyg ? "Skickar..." : "Skicka till verktyg igen"}
+              </button>
             </div>
           </div>
         </div>

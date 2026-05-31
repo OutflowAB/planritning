@@ -12,7 +12,7 @@ export function SectionPage({ title, placeholderText, children }: SectionPagePro
   void title;
 
   return (
-    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
+    <section className="relative flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
       <div className="mx-auto flex w-full max-w-5xl flex-col text-left text-slate-800">
         {placeholderText ? (
           <div className="w-full">

@@ -7,7 +7,6 @@ import {
   ArrowUpTrayIcon,
   Bars3Icon,
   BuildingOffice2Icon,
-  Cog6ToothIcon,
   CreditCardIcon,
   Squares2X2Icon,
   WrenchScrewdriverIcon,
@@ -17,7 +16,9 @@ import { ComponentType, ReactNode, SVGProps, useCallback, useEffect, useMemo, us
 
 import { setAuthenticated } from "@/lib/auth";
 import { markStartsidaConverterForReset } from "@/lib/startsida-converter-session";
-import { hasPendingVerktygSave, VERKTYG_SAVE_PENDING_EVENT } from "@/lib/verktyg-save-session";
+import { hasPendingGenerationReview } from "@/lib/startsida-review-session";
+import { hasPendingSourceSelection } from "@/lib/startsida-source-session";
+import { buildVerktygHref, getPendingVerktygSave, VERKTYG_SAVE_PENDING_EVENT } from "@/lib/verktyg-save-session";
 import { supabase } from "@/lib/supabase";
 
 type DashboardShellProps = {
@@ -32,7 +33,6 @@ const defaultSidebarItems = [
   { label: "Verktyg", href: "/verktyg", icon: WrenchScrewdriverIcon },
   { label: "Planritningar", href: "/planritningar", icon: BuildingOffice2Icon },
   { label: "Uppladdningar", href: "/uppladdningar", icon: ArrowUpTrayIcon },
-  { label: "Fakturering", href: "/fakturering", icon: CreditCardIcon },
 ] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
 
 const adminSidebarItems = [
@@ -40,19 +40,18 @@ const adminSidebarItems = [
   { label: "Verktyg", href: "/admin/verktyg", icon: WrenchScrewdriverIcon },
   { label: "Planritningar", href: "/admin/planritningar", icon: BuildingOffice2Icon },
   { label: "Uppladdningar", href: "/admin/uppladdningar", icon: ArrowUpTrayIcon },
-  { label: "Fakturering", href: "/admin/fakturering", icon: CreditCardIcon },
 ] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
 
-const settingsItem = {
-  label: "Inställningar",
-  href: "/installningar",
-  icon: Cog6ToothIcon,
+const billingItem = {
+  label: "Fakturering",
+  href: "/fakturering",
+  icon: CreditCardIcon,
 } as const satisfies { label: string; href: string; icon: SidebarIcon };
 
-const adminSettingsItem = {
-  label: "Inställningar",
-  href: "/admin/installningar",
-  icon: Cog6ToothIcon,
+const adminBillingItem = {
+  label: "Fakturering",
+  href: "/admin/fakturering",
+  icon: CreditCardIcon,
 } as const satisfies { label: string; href: string; icon: SidebarIcon };
 
 const IMAGE_GENERATION_COST_SEK = 80;
@@ -66,7 +65,7 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [imageGenerationCount, setImageGenerationCount] = useState(0);
-  const [hasPendingPlanritningSave, setHasPendingPlanritningSave] = useState(false);
+  const [verktygSessionVersion, setVerktygSessionVersion] = useState(0);
   const currentMonthLabel = useMemo(
     () =>
       new Date().toLocaleDateString("sv-SE", {
@@ -78,8 +77,16 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
 
   const imageGenerationTotalCost = imageGenerationCount * IMAGE_GENERATION_COST_SEK;
   const sidebarItems = variant === "admin" ? adminSidebarItems : defaultSidebarItems;
-  const activeSettingsItem = variant === "admin" ? adminSettingsItem : settingsItem;
-  const mobileNavItems = [...sidebarItems, activeSettingsItem] as const;
+  const activeBillingItem = variant === "admin" ? adminBillingItem : billingItem;
+  const mobileNavItems = [...sidebarItems, activeBillingItem] as const;
+  const verktygHref = useMemo(() => {
+    const pendingSave = getPendingVerktygSave();
+    if (pendingSave) {
+      return buildVerktygHref(pathname, pendingSave);
+    }
+
+    return variant === "admin" ? "/admin/verktyg" : "/verktyg";
+  }, [pathname, variant, verktygSessionVersion]);
 
   const loadGenerationStats = useCallback(async () => {
     const now = new Date();
@@ -105,20 +112,24 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
   }, []);
 
   useEffect(() => {
-    function syncPendingPlanritningSave() {
-      setHasPendingPlanritningSave(hasPendingVerktygSave());
+    function syncVerktygSession() {
+      setVerktygSessionVersion((version) => version + 1);
     }
 
-    syncPendingPlanritningSave();
-    window.addEventListener(VERKTYG_SAVE_PENDING_EVENT, syncPendingPlanritningSave);
+    syncVerktygSession();
+    window.addEventListener(VERKTYG_SAVE_PENDING_EVENT, syncVerktygSession);
 
     return () => {
-      window.removeEventListener(VERKTYG_SAVE_PENDING_EVENT, syncPendingPlanritningSave);
+      window.removeEventListener(VERKTYG_SAVE_PENDING_EVENT, syncVerktygSession);
     };
   }, []);
 
   useEffect(() => {
-    if (pathname !== "/startsida") {
+    if (
+      pathname !== "/startsida" &&
+      !hasPendingGenerationReview() &&
+      !hasPendingSourceSelection()
+    ) {
       markStartsidaConverterForReset();
     }
   }, [pathname]);
@@ -153,18 +164,19 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
     router.replace("/login");
   }
 
-  function isPlanritningarBlocked(href: string) {
-    return (
-      hasPendingPlanritningSave &&
-      (href === "/planritningar" || href === "/admin/planritningar")
-    );
+  function resolveNavHref(href: string) {
+    if (href === "/verktyg" || href === "/admin/verktyg") {
+      return verktygHref;
+    }
+
+    return href;
   }
 
   function isActivePath(href: string) {
     const exactMatchPaths =
       variant === "admin"
-        ? ["/admin/dashboard", "/admin/verktyg", "/admin/installningar"]
-        : ["/startsida", "/verktyg", "/installningar"];
+        ? ["/admin/dashboard", "/admin/verktyg"]
+        : ["/startsida", "/verktyg"];
 
     if (exactMatchPaths.includes(href)) {
       return pathname === href;
@@ -223,43 +235,31 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
               isSidebarOpen ? "opacity-100" : "pointer-events-none opacity-0"
             }`}
           >
-            {sidebarItems.map((item) =>
-              isPlanritningarBlocked(item.href) ? (
-                <span
-                  key={item.href}
-                  aria-disabled="true"
-                  title="Spara bilden i Verktyg innan du går till Planritningar"
-                  className="inline-flex w-full cursor-not-allowed items-center gap-2 rounded-none px-3 py-4 text-left text-sm font-medium text-white/40"
-                >
-                  <item.icon className="h-4 w-4" aria-hidden="true" />
-                  <span>{item.label}</span>
-                </span>
-              ) : (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`inline-flex w-full items-center gap-2 rounded-none px-3 py-4 text-left text-sm font-medium transition ${
-                    pathname === item.href
-                      ? "bg-white/20 text-white"
-                      : "text-white/85 hover:bg-white/10 hover:text-white"
-                  }`}
-                >
-                  <item.icon className="h-4 w-4" aria-hidden="true" />
-                  <span>{item.label}</span>
-                </Link>
-              ),
-            )}
+            {sidebarItems.map((item) => (
+              <Link
+                key={item.href}
+                href={resolveNavHref(item.href)}
+                className={`inline-flex w-full items-center gap-2 rounded-none px-3 py-4 text-left text-sm font-medium transition ${
+                  isActivePath(item.href)
+                    ? "bg-white/20 text-white"
+                    : "text-white/85 hover:bg-white/10 hover:text-white"
+                }`}
+              >
+                <item.icon className="h-4 w-4" aria-hidden="true" />
+                <span>{item.label}</span>
+              </Link>
+            ))}
 
             <Link
-              href={activeSettingsItem.href}
+              href={activeBillingItem.href}
               className={`mt-auto inline-flex w-full items-center gap-2 rounded-none px-3 py-4 text-left text-sm font-medium transition ${
-                pathname === activeSettingsItem.href
+                isActivePath(activeBillingItem.href)
                   ? "bg-white/20 text-white"
                   : "text-white/85 hover:bg-white/10 hover:text-white"
               }`}
             >
-              <activeSettingsItem.icon className="h-4 w-4" aria-hidden="true" />
-              <span>{activeSettingsItem.label}</span>
+              <activeBillingItem.icon className="h-4 w-4" aria-hidden="true" />
+              <span>{activeBillingItem.label}</span>
             </Link>
 
             <section className="mt-2 mb-2 border-t border-white/20 pt-4">
@@ -295,7 +295,7 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
             </p>
           </section>
 
-          <main className="flex min-h-0 flex-1 pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-0">
+          <main className="flex min-h-0 w-full min-w-0 flex-1 flex-col pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-0">
             {children}
           </main>
         </div>
@@ -309,26 +309,11 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
         <div className="flex items-stretch overflow-x-auto px-1 py-1">
           {mobileNavItems.map((item) => {
             const isActive = isActivePath(item.href);
-            const isBlocked = isPlanritningarBlocked(item.href);
-
-            if (isBlocked) {
-              return (
-                <span
-                  key={item.href}
-                  aria-disabled="true"
-                  title="Spara bilden i Verktyg innan du går till Planritningar"
-                  className="inline-flex min-w-[88px] flex-1 cursor-not-allowed flex-col items-center justify-center gap-1 rounded-sm px-3 py-2 text-[11px] font-medium text-white/35"
-                >
-                  <item.icon className="h-4 w-4" aria-hidden="true" />
-                  <span>{item.label}</span>
-                </span>
-              );
-            }
 
             return (
               <Link
                 key={item.href}
-                href={item.href}
+                href={resolveNavHref(item.href)}
                 className={`inline-flex min-w-[88px] flex-1 flex-col items-center justify-center gap-1 rounded-sm px-3 py-2 text-[11px] font-medium transition ${
                   isActive ? "bg-white/20 text-white" : "text-white/80 hover:bg-white/10 hover:text-white"
                 }`}
