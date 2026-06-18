@@ -1224,7 +1224,7 @@ export function FloorplanEnhancer() {
       >
         <div className="flex items-start justify-between gap-3 border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
           <h2 id="approve-destination-title" className="text-sm font-semibold text-[#4d463f]">
-            Vill du justera bilden?
+            Planritningen är klar
           </h2>
           <button
             type="button"
@@ -1238,25 +1238,25 @@ export function FloorplanEnhancer() {
         </div>
         <div className="px-4 py-4">
           <p id="approve-destination-description" className="text-sm text-[#6a6258]">
-            Skicka till verktyg för vidare redigering, eller spara direkt i planritningar.
+            Fortsätt redigera om du vill göra fler ändringar, eller spara planritningen direkt.
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
-          <button
-            type="button"
-            onClick={() => void submitGenerationReview("approve", "planritningar")}
-            disabled={isReviewSubmitting}
-            className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isReviewSubmitting ? "Sparar..." : "Skicka till planritningar"}
-          </button>
           <button
             type="button"
             onClick={() => void submitGenerationReview("approve", "verktyg")}
             disabled={isReviewSubmitting}
             className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isReviewSubmitting ? "Sparar..." : "Skicka till verktyg"}
+            {isReviewSubmitting ? "Sparar..." : "Redigera"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void submitGenerationReview("approve", "planritningar")}
+            disabled={isReviewSubmitting}
+            className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isReviewSubmitting ? "Sparar..." : "Spara"}
           </button>
         </div>
       </div>
@@ -1437,7 +1437,7 @@ export function FloorplanEnhancer() {
                       disabled={isReviewSubmitting}
                       className="inline-flex min-w-[157px] items-center justify-center gap-1.5 rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Nej
+                      Neka
                       <X size={14} aria-hidden="true" />
                     </button>
                     <button
