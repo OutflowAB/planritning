@@ -209,8 +209,12 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
         });
         documentRef.current = nextDocument;
         commitDocument(nextDocument);
-        applyCanvasLayerOrder(canvas);
-        canvas.requestRenderAll();
+        const activeCanvas = canvasRef.current;
+        if (!activeCanvas) {
+          return;
+        }
+        applyCanvasLayerOrder(activeCanvas);
+        activeCanvas.requestRenderAll();
       }
 
       canvas.on("path:created", handlePathCreated);

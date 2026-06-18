@@ -234,7 +234,11 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
       return;
     }
 
-    function handleMouseMove(options: { e: MouseEvent }) {
+    function handleMouseMove(options: { e: MouseEvent | TouchEvent }) {
+      if (!(options.e instanceof MouseEvent)) {
+        return;
+      }
+
       lastEraserPointerRef.current = {
         clientX: options.e.clientX,
         clientY: options.e.clientY,
