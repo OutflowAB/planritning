@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import path from "node:path";
 
 import { COMPARE_RESPONSE_CONTENT_TYPE, packCompareResponse } from "@/lib/floorplan-compare-layout";
+import { imageDownloadFileName } from "@/lib/image-naming";
 import { cropToMainContent } from "@/lib/image/smart-crop";
 
 const TARGET_MAX_WIDTH = 1200;
@@ -39,12 +40,6 @@ function createSupabaseServerClient() {
       autoRefreshToken: false,
     },
   });
-}
-
-function buildGeneratedFileName(originalName: string) {
-  const parsed = path.parse(originalName);
-  const stem = parsed.name.trim() || "planritning";
-  return `${stem}-bearbetad.png`;
 }
 
 async function insertGenerationEvent(supabase: ReturnType<typeof createSupabaseServerClient>) {
@@ -115,6 +110,20 @@ async function resolveSourceUploadId(
     .single();
 
   if (sourceInsertError || !insertedSource?.id) {
+    await supabase.storage.from(BUCKET_NAME).remove([sourceStoragePath]);
+    return {
+      sourceUploadId: null,
+      sourceUploadError: "Kunde inte spara metadata för originalbilden.",
+    };
+  }
+
+  const sourceFileName = imageDownloadFileName(insertedSource.id, extension);
+  const { error: sourceRenameError } = await supabase
+    .from(UPLOADS_TABLE)
+    .update({ file_name: sourceFileName })
+    .eq("id", insertedSource.id);
+
+  if (sourceRenameError) {
     await supabase.storage.from(BUCKET_NAME).remove([sourceStoragePath]);
     return {
       sourceUploadId: null,
@@ -301,7 +310,6 @@ export async function POST(request: Request) {
 
     const uniqueGeneratedName = `${Date.now()}-${crypto.randomUUID()}.png`;
     const storagePath = `${GENERATED_PREFIX}${uniqueGeneratedName}`;
-    const generatedFileName = buildGeneratedFileName(uploadedFile.name);
 
     const { error: uploadError } = await supabase.storage.from(BUCKET_NAME).upload(storagePath, outputBuffer, {
       upsert: false,
@@ -316,7 +324,7 @@ export async function POST(request: Request) {
     const { data: insertedImage, error: insertError } = await supabase
       .from(UPLOADS_TABLE)
       .insert({
-        file_name: generatedFileName,
+        file_name: "planritning.png",
         file_path: storagePath,
         file_size: outputBuffer.byteLength,
         mime_type: "image/png",
@@ -325,9 +333,21 @@ export async function POST(request: Request) {
       .select("id, file_path")
       .single();
 
-    if (insertError) {
+    if (insertError || !insertedImage?.id) {
       await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
       console.error("Failed to store generated image metadata", insertError);
+      return NextResponse.json({ message: "Kunde inte spara bildens metadata." }, { status: 500 });
+    }
+
+    const generatedFileName = imageDownloadFileName(insertedImage.id, "png");
+    const { error: generatedRenameError } = await supabase
+      .from(UPLOADS_TABLE)
+      .update({ file_name: generatedFileName })
+      .eq("id", insertedImage.id);
+
+    if (generatedRenameError) {
+      await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
+      console.error("Failed to rename generated image metadata", generatedRenameError);
       return NextResponse.json({ message: "Kunde inte spara bildens metadata." }, { status: 500 });
     }
 

@@ -15,9 +15,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { ComponentType, ReactNode, SVGProps, useCallback, useEffect, useMemo, useState } from "react";
 
 import { setAuthenticated } from "@/lib/auth";
-import { markStartsidaConverterForReset } from "@/lib/startsida-converter-session";
-import { hasPendingGenerationReview } from "@/lib/startsida-review-session";
-import { hasPendingSourceSelection } from "@/lib/startsida-source-session";
 import { buildVerktygHref, getPendingVerktygSave, VERKTYG_SAVE_PENDING_EVENT } from "@/lib/verktyg-save-session";
 import { supabase } from "@/lib/supabase";
 
@@ -54,7 +51,7 @@ const adminBillingItem = {
   icon: CreditCardIcon,
 } as const satisfies { label: string; href: string; icon: SidebarIcon };
 
-const IMAGE_GENERATION_COST_SEK = 80;
+const IMAGE_GENERATION_COST_SEK = 50;
 const UPLOADS_TABLE = "uploaded_images";
 const GENERATED_UPLOADS_PREFIX = "generated/";
 const GENERATION_EVENTS_EVENT = "generation_events";
@@ -123,16 +120,6 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
       window.removeEventListener(VERKTYG_SAVE_PENDING_EVENT, syncVerktygSession);
     };
   }, []);
-
-  useEffect(() => {
-    if (
-      pathname !== "/startsida" &&
-      !hasPendingGenerationReview() &&
-      !hasPendingSourceSelection()
-    ) {
-      markStartsidaConverterForReset();
-    }
-  }, [pathname]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {

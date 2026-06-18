@@ -25,6 +25,8 @@ type ToolDefinition = {
   hint?: string;
 };
 
+const DISABLED_TOOLS: ReadonlySet<EditorTool> = new Set(["furniture"]);
+
 const TOOLS: ToolDefinition[] = [
   { id: "select", label: "Markera", icon: <MousePointer2 size={18} /> },
   { id: "eraser", label: "Sudda", icon: <Eraser size={18} /> },
@@ -109,16 +111,26 @@ export function EditorToolbar({ controller, isLoading = false }: EditorToolbarPr
             <div className="grid min-w-0 flex-1 grid-cols-9 items-center justify-items-center">
               {TOOLS.map((tool) => {
                 const isActive = controller.activeTool === tool.id;
+                const isDisabled = DISABLED_TOOLS.has(tool.id);
                 return (
                   <button
                     key={tool.id}
                     type="button"
-                    title={tool.hint ? `${tool.label} — ${tool.hint}` : tool.label}
+                    disabled={isDisabled}
+                    title={
+                      isDisabled
+                        ? `${tool.label} — kommer snart`
+                        : tool.hint
+                          ? `${tool.label} — ${tool.hint}`
+                          : tool.label
+                    }
                     onClick={() => controller.setActiveTool(tool.id)}
                     className={`inline-flex flex-col items-center gap-1 rounded-none px-2 py-2 text-[10px] font-semibold transition ${
-                      isActive
-                        ? "bg-[#5c544a] text-white"
-                        : "text-[#4d463f] hover:bg-[#ece7df]"
+                      isDisabled
+                        ? "cursor-not-allowed opacity-40"
+                        : isActive
+                          ? "bg-[#5c544a] text-white"
+                          : "text-[#4d463f] hover:bg-[#ece7df]"
                     }`}
                   >
                     {tool.icon}

@@ -3,9 +3,17 @@
 import Image from "next/image";
 import { Download, Loader2, Minus, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChangeEvent, DragEvent, TouchEvent, WheelEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, TouchEvent, WheelEvent, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { isAuthenticated } from "@/lib/auth";
+import {
+  imageDisplayName,
+  resolveImageDownloadFileName,
+} from "@/lib/image-naming";
+import {
+  hasUnfinishedConverterSession,
+  subscribeUnfinishedConverterSession,
+} from "@/lib/startsida-converter-session";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ui/toast-provider";
 
@@ -129,11 +137,20 @@ function writeUploadsListCache(rows: UploadedImageRow[]) {
   window.sessionStorage.setItem(UPLOADS_LIST_CACHE_KEY, JSON.stringify(payload));
 }
 
+function useHasUnfinishedConverterSession() {
+  return useSyncExternalStore(
+    subscribeUnfinishedConverterSession,
+    () => hasUnfinishedConverterSession(),
+    () => false,
+  );
+}
+
 export default function UppladdningarPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { showToast } = useToast();
+  const isConverterSessionUnfinished = useHasUnfinishedConverterSession();
   const canDelete = isAuthenticated();
   const converterPath = pathname.startsWith("/admin") ? "/admin/dashboard" : "/startsida";
   const [isUploading, setIsUploading] = useState(false);
@@ -170,10 +187,18 @@ export default function UppladdningarPage() {
   }
 
   function goToConverter(upload: UploadedImageRow) {
+    if (isConverterSessionUnfinished) {
+      showToast("Slutför den påbörjade konverteringen först.", "error");
+      return;
+    }
+
     if (upload.preview_url) {
       const payload: ConverterTransferPayload = {
         previewUrl: upload.preview_url,
-        fileName: upload.file_name,
+        fileName: resolveImageDownloadFileName(upload.id, {
+          mimeType: upload.mime_type,
+          filePath: upload.file_path,
+        }),
         uploadId: upload.id,
       };
       window.sessionStorage.setItem(CONVERTER_TRANSFER_KEY, JSON.stringify(payload));
@@ -273,7 +298,10 @@ export default function UppladdningarPage() {
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectUrl;
-      link.download = previewImage.file_name || "planritning";
+      link.download = resolveImageDownloadFileName(previewImage.id, {
+        mimeType: previewImage.mime_type,
+        filePath: previewImage.file_path,
+      });
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -529,16 +557,36 @@ export default function UppladdningarPage() {
         return;
       }
 
-      const { error: insertError } = await supabase.from(UPLOADS_TABLE).insert({
-        file_name: file.name,
-        file_path: storagePath,
-        file_size: file.size,
-        mime_type: file.type || null,
-      });
+      const { data: insertedUpload, error: insertError } = await supabase
+        .from(UPLOADS_TABLE)
+        .insert({
+          file_name: file.name,
+          file_path: storagePath,
+          file_size: file.size,
+          mime_type: file.type || null,
+        })
+        .select("id")
+        .single();
 
-      if (insertError) {
+      if (insertError || !insertedUpload?.id) {
         await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
-        showToast(`Kunde inte spara i databasen: ${insertError.message}`, "error");
+        showToast(`Kunde inte spara i databasen: ${insertError?.message ?? "Okänt fel"}`, "error");
+        return;
+      }
+
+      const fileName = resolveImageDownloadFileName(insertedUpload.id, {
+        mimeType: file.type,
+        filePath: storagePath,
+      });
+      const { error: renameError } = await supabase
+        .from(UPLOADS_TABLE)
+        .update({ file_name: fileName })
+        .eq("id", insertedUpload.id);
+
+      if (renameError) {
+        await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
+        await supabase.from(UPLOADS_TABLE).delete().eq("id", insertedUpload.id);
+        showToast(`Kunde inte spara i databasen: ${renameError.message}`, "error");
         return;
       }
 
@@ -747,7 +795,7 @@ export default function UppladdningarPage() {
                       >
                         <Image
                           src={upload.preview_url}
-                          alt={upload.file_name}
+                          alt={imageDisplayName(upload.id)}
                           width={1200}
                           height={900}
                           onLoad={() =>
@@ -853,7 +901,7 @@ export default function UppladdningarPage() {
                 >
                   <Image
                     src={previewImage.preview_url}
-                    alt={previewImage.file_name}
+                    alt={imageDisplayName(previewImage.id)}
                     width={2200}
                     height={1600}
                     className="h-auto max-h-[calc(90vh-250px)] w-auto max-w-full border border-[#d8d2c8] bg-white object-contain transition-transform duration-150"
@@ -864,15 +912,29 @@ export default function UppladdningarPage() {
             </div>
 
             <div className="flex items-center justify-end border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
-              <button
-                type="button"
-                onClick={() => goToConverter(previewImage)}
-                aria-label="Konvertera"
-                title="Konvertera"
-                className="rounded-none border border-[#d8d2c8] bg-white px-4 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
-              >
-                Konvertera
-              </button>
+              <div className="group relative inline-flex">
+                {isConverterSessionUnfinished ? (
+                  <span
+                    id="converter-blocked-reason"
+                    role="tooltip"
+                    className="pointer-events-none absolute bottom-full right-0 z-10 mb-2 w-max max-w-xs rounded-none border border-[#d8d2c8] bg-[#3d3a36] px-3 py-2 text-xs font-medium leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+                  >
+                    Slutför den påbörjade konverteringen först
+                  </span>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => goToConverter(previewImage)}
+                  disabled={isConverterSessionUnfinished}
+                  aria-label="Konvertera"
+                  aria-describedby={
+                    isConverterSessionUnfinished ? "converter-blocked-reason" : undefined
+                  }
+                  className="rounded-none border border-[#d8d2c8] bg-white px-4 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Konvertera
+                </button>
+              </div>
             </div>
           </div>
         </div>

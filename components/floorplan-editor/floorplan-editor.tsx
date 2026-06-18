@@ -66,9 +66,20 @@ export function FloorplanEditor({
   });
 
   async function handleSaveToLibrary() {
-    const saved = await controller.saveDocument();
-    if (saved) {
+    setErrorMessage("");
+
+    try {
+      const saved = await controller.saveDocument();
+      if (!saved) {
+        return;
+      }
+
+      await controller.publishFlattenedImage();
       await onSaveToLibrary();
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Kunde inte spara bilden just nu.",
+      );
     }
   }
 
@@ -93,7 +104,7 @@ export function FloorplanEditor({
   }
 
   const isEditorLoading = controller.isLoading;
-  const canvasError = imageLoadError || errorMessage;
+  const blockingCanvasError = imageLoadError;
 
   return (
     <section className="flex h-[calc(100vh-4rem)] max-h-[calc(100vh-4rem)] w-full flex-col overflow-hidden bg-[#f5f3f0]">
@@ -151,8 +162,12 @@ export function FloorplanEditor({
         </div>
       ) : null}
 
-      {canvasError && !isEditorLoading ? (
-        <p className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{canvasError}</p>
+      {errorMessage && !isEditorLoading ? (
+        <p className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{errorMessage}</p>
+      ) : null}
+
+      {blockingCanvasError && !isEditorLoading ? (
+        <p className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{blockingCanvasError}</p>
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col">
@@ -160,9 +175,9 @@ export function FloorplanEditor({
         <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {isEditorLoading ? (
             <EditorCanvasLoading />
-          ) : canvasError ? (
+          ) : blockingCanvasError ? (
             <div className="flex min-h-0 flex-1 items-center justify-center bg-[#ebe7e1] px-6 text-center text-sm text-red-700">
-              {canvasError}
+              {blockingCanvasError}
             </div>
           ) : (
             <EditorCanvas controller={controller} />

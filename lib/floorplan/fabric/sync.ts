@@ -30,6 +30,10 @@ import { CANVA_PURPLE, CANVA_SELECTION_PROPS } from "@/lib/floorplan/fabric/canv
 const FLOORPLAN_DATA_KEY = "floorplan";
 const FLOORPLAN_BACKGROUND_KEY = "floorplan-background";
 
+export function isCanvasOperational(canvas: Canvas | null | undefined): canvas is Canvas {
+  return Boolean(canvas && !canvas.disposed && !canvas.destroyed);
+}
+
 const backgroundImageCache = new Map<string, Promise<FabricImage>>();
 
 async function loadMasterBackgroundImage(url: string): Promise<FabricImage> {
@@ -60,13 +64,17 @@ export function hasFloorplanBackground(canvas: Canvas): boolean {
 const ERASER_STROKE_PROPS = {
   fill: "",
   stroke: SM_EDITOR.background,
-  strokeLineCap: "square" as const,
-  strokeLineJoin: "miter" as const,
+  strokeLineCap: "round" as const,
+  strokeLineJoin: "round" as const,
   selectable: false,
   evented: false,
 };
 
 export function configureCanvasSelectionStyle(canvas: Canvas) {
+  if (!isCanvasOperational(canvas)) {
+    return;
+  }
+
   canvas.set({
     selectionColor: "rgba(139, 61, 255, 0.08)",
     selectionBorderColor: CANVA_PURPLE,
@@ -79,6 +87,10 @@ export function configureCanvasToolMode(
   canvas: Canvas,
   activeTool: "select" | "eraser" | string,
 ) {
+  if (!isCanvasOperational(canvas)) {
+    return;
+  }
+
   canvas.clipPath = undefined;
 
   if (activeTool === "eraser") {
@@ -91,8 +103,8 @@ export function configureCanvasToolMode(
     canvas.freeDrawingBrush = new PencilBrush(canvas);
     canvas.freeDrawingBrush.color = SM_EDITOR.background;
     canvas.freeDrawingBrush.width = SM_EDITOR.eraserBrushWidth;
-    canvas.freeDrawingBrush.strokeLineCap = "square";
-    canvas.freeDrawingBrush.strokeLineJoin = "miter";
+    canvas.freeDrawingBrush.strokeLineCap = "round";
+    canvas.freeDrawingBrush.strokeLineJoin = "round";
     return;
   }
 
@@ -589,6 +601,10 @@ export async function renderDocumentToCanvas(
   backgroundUrl: string,
 ) {
   const background = await loadFloorplanBackgroundImage(backgroundUrl);
+  if (!isCanvasOperational(canvas)) {
+    return;
+  }
+
   background.set({
     left: 0,
     top: 0,

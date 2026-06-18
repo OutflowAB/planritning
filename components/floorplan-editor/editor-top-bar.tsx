@@ -1,6 +1,6 @@
 "use client";
 
-import { Minus, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
+import { ArrowLeft, Check, Minus, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
 
 import {
   FLOORPLAN_MAX_ZOOM,
@@ -38,8 +38,9 @@ export function EditorTopBar({
             type="button"
             onClick={onLeave}
             disabled={isLeaving || isPublishing || controller.isSaving || isLoading}
-            className="rounded-none border border-[#d8d2c8] bg-white px-3 py-1.5 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-none border border-[#d8d2c8] bg-white px-3 py-1.5 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
           >
+            <ArrowLeft size={14} aria-hidden="true" />
             {isLeaving ? "Lämnar..." : "Lämna"}
           </button>
         ) : null}
@@ -111,9 +112,10 @@ export function EditorTopBar({
             type="button"
             onClick={() => void onSaveAndPublish()}
             disabled={isPublishing || controller.isSaving || isLoading}
-            className="rounded-none bg-[#5c544a] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-none bg-[#5c544a] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isPublishing ? "Sparar..." : "Slutför"}
+            <Check size={14} aria-hidden="true" />
           </button>
         ) : null}
       </div>

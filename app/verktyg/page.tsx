@@ -15,6 +15,7 @@ import {
   setPendingVerktygSave,
 } from "@/lib/verktyg-save-session";
 import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
+import { imageDisplayName, imageDownloadBaseName } from "@/lib/image-naming";
 
 type ApprovedImageRow = {
   id: number;
@@ -150,7 +151,7 @@ function VerktygList() {
                     >
                       <Image
                         src={image.preview_url}
-                        alt={image.file_name}
+                        alt={imageDisplayName(image.id)}
                         width={1200}
                         height={900}
                         className="max-h-[220px] w-auto max-w-full rounded-none border border-[#d8d2c8] bg-white object-contain"
@@ -189,7 +190,7 @@ function buildStubApprovedImage(imageId: string, imagePath: string): ApprovedIma
   const id = Number(imageId);
   return {
     id,
-    file_name: `Bild ${id}`,
+    file_name: imageDownloadBaseName(id),
     file_path: imagePath,
     created_at: new Date().toISOString(),
     preview_url: buildFloorplanImageUrl(id, imagePath),

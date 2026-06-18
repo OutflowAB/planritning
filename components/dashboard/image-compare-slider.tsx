@@ -4,6 +4,7 @@ import { PointerEvent, ReactNode, useCallback, useEffect, useRef, useState } fro
 
 import {
   preventImageContextMenu,
+  warmWatermarkImage,
   WatermarkOverlay,
 } from "@/components/dashboard/watermark-overlay";
 
@@ -16,7 +17,11 @@ type ImageCompareSliderProps = {
   onClick?: () => void;
   protectAfterImage?: boolean;
   loadingFallback?: ReactNode;
+  onReadyChange?: (ready: boolean) => void;
+  playEntranceAnimation?: boolean;
 };
+
+const ENTRANCE_ANIMATION_MS = 900;
 
 const IMAGE_CLASS_NAME = "block h-auto w-auto max-h-[min(60vh,640px)] max-w-full bg-white";
 
@@ -43,8 +48,13 @@ export function warmCompareImageSrc(src: string) {
 }
 
 export function warmCompareImageCache(beforeSrc: string, afterSrc: string) {
+  warmWatermarkImage();
   warmCompareImageSrc(beforeSrc);
   warmCompareImageSrc(afterSrc);
+}
+
+export function areCompareImagesCached(beforeSrc: string, afterSrc: string) {
+  return loadedCompareImageSrcs.has(beforeSrc) && loadedCompareImageSrcs.has(afterSrc);
 }
 
 export function ImageCompareSlider({
@@ -56,14 +66,18 @@ export function ImageCompareSlider({
   onClick,
   protectAfterImage = false,
   loadingFallback = null,
+  onReadyChange,
+  playEntranceAnimation = true,
 }: ImageCompareSliderProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState(50);
   const [renderedSize, setRenderedSize] = useState({ width: 0, height: 0 });
   const [isTransitionEnabled, setIsTransitionEnabled] = useState(false);
+  const [isEntranceAnimating, setIsEntranceAnimating] = useState(false);
   const [imagesReady, setImagesReady] = useState(
     () => loadedCompareImageSrcs.has(afterSrc) && loadedCompareImageSrcs.has(beforeSrc),
   );
+  const entrancePlayedForSrcRef = useRef<string | null>(null);
   const isDraggingRef = useRef(false);
   const didDragRef = useRef(false);
 
@@ -91,9 +105,13 @@ export function ImageCompareSlider({
 
     if (!bothCached) {
       setImagesReady(false);
-      setPosition(50);
       setIsTransitionEnabled(false);
+      setIsEntranceAnimating(false);
       setRenderedSize({ width: 0, height: 0 });
+      setPosition(50);
+      entrancePlayedForSrcRef.current = null;
+    } else {
+      setImagesReady(true);
     }
 
     void Promise.all([preloadImage(afterSrc), preloadImage(beforeSrc)])
@@ -111,20 +129,43 @@ export function ImageCompareSlider({
     return () => {
       cancelled = true;
     };
-  }, [beforeSrc, afterSrc]);
+  }, [beforeSrc, afterSrc, playEntranceAnimation]);
 
   useEffect(() => {
-    if (!imagesReady) {
+    onReadyChange?.(imagesReady);
+  }, [imagesReady, onReadyChange]);
+
+  useEffect(() => {
+    if (!imagesReady || !playEntranceAnimation || renderedSize.width === 0) {
       return;
     }
+
+    const srcKey = `${beforeSrc}\0${afterSrc}`;
+    if (entrancePlayedForSrcRef.current === srcKey) {
+      return;
+    }
+
+    entrancePlayedForSrcRef.current = srcKey;
+    setPosition(50);
+    setIsTransitionEnabled(false);
+    setIsEntranceAnimating(true);
 
     const revealTimer = window.setTimeout(() => {
       setIsTransitionEnabled(true);
       setPosition(0);
-    }, loadedCompareImageSrcs.has(afterSrc) && loadedCompareImageSrcs.has(beforeSrc) ? 0 : 300);
+    }, 120);
 
-    return () => window.clearTimeout(revealTimer);
-  }, [imagesReady, beforeSrc, afterSrc]);
+    const settleTimer = window.setTimeout(() => {
+      setIsEntranceAnimating(false);
+      setIsTransitionEnabled(false);
+    }, 120 + ENTRANCE_ANIMATION_MS);
+
+    return () => {
+      window.clearTimeout(revealTimer);
+      window.clearTimeout(settleTimer);
+      entrancePlayedForSrcRef.current = null;
+    };
+  }, [imagesReady, beforeSrc, afterSrc, playEntranceAnimation, renderedSize.width]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -139,7 +180,7 @@ export function ImageCompareSlider({
   }, [imagesReady, syncRenderedSize, beforeSrc, afterSrc]);
 
   const transitionStyle = isTransitionEnabled
-    ? { transition: "width 0.8s ease-in-out, left 0.8s ease-in-out" }
+    ? { transition: `width ${ENTRANCE_ANIMATION_MS}ms ease-in-out, left ${ENTRANCE_ANIMATION_MS}ms ease-in-out` }
     : undefined;
 
   const updatePositionFromClientX = useCallback((clientX: number) => {
@@ -187,7 +228,7 @@ export function ImageCompareSlider({
     onClick?.();
   }
 
-  if (!imagesReady) {
+  if (!imagesReady && !protectAfterImage) {
     return loadingFallback ?? (
       <div
         className="flex min-h-[min(60vh,640px)] w-full items-center justify-center bg-[#f0ece6]"
@@ -200,20 +241,23 @@ export function ImageCompareSlider({
   return (
     <div
       ref={containerRef}
-      className={`relative mx-auto block w-fit max-w-full touch-none select-none overflow-hidden bg-white leading-none ${className}`}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
-      onClick={handleClick}
+      className={`relative mx-auto block w-fit max-w-full touch-none select-none overflow-hidden bg-white leading-none ${
+        onClick ? "cursor-pointer" : ""
+      } ${className} ${imagesReady && !isEntranceAnimating ? "" : "pointer-events-none"}`}
+      onPointerDown={imagesReady && !isEntranceAnimating ? handlePointerDown : undefined}
+      onPointerMove={imagesReady && !isEntranceAnimating ? handlePointerMove : undefined}
+      onPointerUp={imagesReady && !isEntranceAnimating ? handlePointerUp : undefined}
+      onPointerCancel={imagesReady && !isEntranceAnimating ? handlePointerUp : undefined}
+      onClick={imagesReady && !isEntranceAnimating ? handleClick : undefined}
       onContextMenu={protectAfterImage ? preventImageContextMenu : undefined}
       role="slider"
       aria-label="Jämför original och resultat"
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(position)}
+      aria-busy={!imagesReady}
     >
-      <div className="relative w-fit max-w-full">
+      <div className="relative w-fit max-w-full min-h-[min(60vh,640px)]">
         <img
           src={afterSrc}
           alt={afterAlt}
@@ -225,44 +269,48 @@ export function ImageCompareSlider({
         {protectAfterImage ? <WatermarkOverlay /> : null}
       </div>
 
-      <div
-        className="absolute inset-y-0 left-0 overflow-hidden"
-        style={{ width: `${position}%`, ...transitionStyle }}
-        aria-hidden="true"
-      >
-        <div
-          className="relative h-full"
-          style={{
-            width: renderedSize.width > 0 ? renderedSize.width : "100%",
-            height: renderedSize.height > 0 ? renderedSize.height : "100%",
-          }}
-        >
-          <img
-            src={beforeSrc}
-            alt={beforeAlt}
-            draggable={false}
-            onLoad={syncRenderedSize}
-            className="absolute left-0 top-0 max-w-none"
-            style={{
-              width: renderedSize.width > 0 ? renderedSize.width : "100%",
-              height: renderedSize.height > 0 ? renderedSize.height : "100%",
-            }}
-          />
-        </div>
-      </div>
+      {imagesReady ? (
+        <>
+          <div
+            className="absolute inset-y-0 left-0 z-[8] overflow-hidden"
+            style={{ width: `${position}%`, ...transitionStyle }}
+            aria-hidden="true"
+          >
+            <div
+              className="relative h-full"
+              style={{
+                width: renderedSize.width > 0 ? renderedSize.width : "100%",
+                height: renderedSize.height > 0 ? renderedSize.height : "100%",
+              }}
+            >
+              <img
+                src={beforeSrc}
+                alt={beforeAlt}
+                draggable={false}
+                onLoad={syncRenderedSize}
+                className="absolute left-0 top-0 max-w-none"
+                style={{
+                  width: renderedSize.width > 0 ? renderedSize.width : "100%",
+                  height: renderedSize.height > 0 ? renderedSize.height : "100%",
+                }}
+              />
+            </div>
+          </div>
 
-      <div
-        className="pointer-events-none absolute inset-y-0 z-10 w-0.5 -translate-x-1/2 bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.15)]"
-        style={{ left: `${position}%`, ...transitionStyle }}
-        aria-hidden="true"
-      >
-        <div className="absolute left-1/2 top-1/2 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[#d8d2c8] bg-white shadow-sm">
-          <span className="flex items-center gap-0.5 text-[10px] font-bold text-[#6a6258]">
-            <span aria-hidden="true">‹</span>
-            <span aria-hidden="true">›</span>
-          </span>
-        </div>
-      </div>
+          <div
+            className="pointer-events-none absolute inset-y-0 z-10 w-0.5 -translate-x-1/2 bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.15)]"
+            style={{ left: `${position}%`, ...transitionStyle }}
+            aria-hidden="true"
+          >
+            <div className="absolute left-1/2 top-1/2 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[#d8d2c8] bg-white shadow-sm">
+              <span className="flex items-center gap-0.5 text-[10px] font-bold text-[#6a6258]">
+                <span aria-hidden="true">‹</span>
+                <span aria-hidden="true">›</span>
+              </span>
+            </div>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

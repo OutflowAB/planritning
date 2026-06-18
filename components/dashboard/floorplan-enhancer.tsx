@@ -18,6 +18,7 @@ import {
 import { createPortal } from "react-dom";
 
 import {
+  areCompareImagesCached,
   ImageCompareSlider,
   warmCompareImageCache,
   warmCompareImageSrc,
@@ -29,9 +30,12 @@ import {
 import { useToast } from "@/components/ui/toast-provider";
 import { unpackCompareResponse } from "@/lib/floorplan-compare-layout";
 import {
+  imageDisplayName,
+  resolveImageDownloadFileName,
+} from "@/lib/image-naming";
+import {
   CONVERTER_TRANSFER_KEY,
   hasPendingConverterTransfer,
-  markStartsidaConverterForReset,
 } from "@/lib/startsida-converter-session";
 import {
   clearPendingGenerationReview,
@@ -62,15 +66,169 @@ const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
-// TODO: tillfälligt 1s — återställ till 10_000
-const PROCESSING_MIN_DURATION_MS = 1_000;
+const PROCESSING_MIN_DURATION_MS = 20_000;
+const PROCESSING_TERMINAL_DURATION_MS = 15_000;
+const PROCESSING_AI_ENHANCE_DURATION_MS = 5_000;
 const PROCESSING_STEPS = [
-  "Laddar upp bild",
-  "Analyserar planritning",
-  "Identifierar väggar och rum",
-  "Förbättrar linjer och kontrast",
-  "Genererar slutresultat",
+  "Förbehandlar uppladdad bild",
+  "Extraherar väggar och konturer",
+  "Kartlägger rumsindelning",
+  "Optimerar linjer och kontrast",
+  "Exporterar slutresultat",
 ] as const;
+const AI_ENHANCING_STEPS = [
+  "AI förbättrar vägglinjer",
+  "AI rensar bakgrundsbrus",
+  "AI skärper rumsindelning",
+  "AI polerar slutresultat",
+] as const;
+
+type TerminalLineType = "cmd" | "ok" | "info" | "warn" | "data";
+
+type TerminalLine = {
+  type: TerminalLineType;
+  text: string;
+};
+
+function buildTerminalSequence(): TerminalLine[][] {
+  const hash = () =>
+    Array.from({ length: 8 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+  const coord = () => `${Math.floor(Math.random() * 2400)},${Math.floor(Math.random() * 1800)}`;
+  const ms = () => `${(Math.random() * 400 + 12).toFixed(1)}ms`;
+
+  return [
+    [
+      { type: "cmd", text: "> planritning-engine ingest --strict" },
+      { type: "info", text: "[..] mounting buffer 4096×3072 RGBA" },
+      { type: "ok", text: `[ok] decoded tile stream sha1:${hash()}` },
+      { type: "info", text: "[..] EXIF rotate 90° CCW" },
+      { type: "ok", text: `[ok] gamma normalize 2.2 (${ms()})` },
+      { type: "data", text: `    chunks: 64 | vram: 312 MB` },
+    ],
+    [
+      { type: "cmd", text: "> wall_scan --kernel=cuda:0" },
+      { type: "info", text: "[..] launching Hough accumulator grid 128×128" },
+      { type: "ok", text: `[ok] 1,247 edge candidates @ ${coord()}` },
+      { type: "warn", text: `[!!] ghost wall suppressed sector 7 @ ${coord()}` },
+      { type: "ok", text: "[ok] merged 3 duplicate partitions" },
+      { type: "data", text: `    vectors: 89v / 112h | confidence 0.94` },
+    ],
+    [
+      { type: "cmd", text: "> room_graph --build-adjacency" },
+      { type: "info", text: "[..] flood-fill 12 connected components" },
+      { type: "ok", text: `[ok] topology locked id:${hash()}` },
+      { type: "warn", text: "[!!] non-manifold edge @ (891, 412) — patched" },
+      { type: "ok", text: "[ok] 12 rooms classified, 1 excluded (balkong)" },
+      { type: "data", text: `    graph nodes: 12 | edges: 31` },
+    ],
+    [
+      { type: "cmd", text: "> line_pass --iter=4 --sharpen" },
+      { type: "info", text: "[..] morphological open/close pass 1/4" },
+      { type: "ok", text: `[ok] sharpened 2,341 vectors (${ms()})` },
+      { type: "info", text: "[..] contrast stretch LUT applied" },
+      { type: "ok", text: `[ok] noise floor -18dB @ ${coord()}` },
+      { type: "data", text: `    SNR: 34.2 dB | artifacts: 0` },
+    ],
+    [
+      { type: "cmd", text: "> export --format=png --dpi=300" },
+      { type: "info", text: "[..] rasterizing 2480×3508 @ 300dpi" },
+      { type: "ok", text: `[ok] deflate stream id:${hash()}` },
+      { type: "ok", text: `[ok] checksum verified (${ms()})` },
+      { type: "data", text: "    output: 4.1 MB | ready" },
+      { type: "ok", text: "[ok] pipeline complete ✓" },
+    ],
+  ];
+}
+
+function terminalLineClass(type: TerminalLineType) {
+  switch (type) {
+    case "cmd":
+      return "font-medium text-[#4d463f]";
+    case "ok":
+      return "text-[#5c544a]";
+    case "warn":
+      return "text-[#8b6914]";
+    case "data":
+      return "text-[#b8aea0]";
+    default:
+      return "text-[#7b746a]";
+  }
+}
+
+function ProcessingTerminalLog({
+  stepIndex,
+  active,
+}: {
+  stepIndex: number;
+  active: boolean;
+}) {
+  const [lines, setLines] = useState<TerminalLine[]>([]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sequencesRef = useRef(buildTerminalSequence());
+  const maxStepRef = useRef(0);
+  const cursorRef = useRef({ step: 0, line: 0 });
+
+  useEffect(() => {
+    maxStepRef.current = Math.max(maxStepRef.current, stepIndex);
+  }, [stepIndex]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    const sequences = sequencesRef.current;
+
+    const intervalId = window.setInterval(() => {
+      const cursor = cursorRef.current;
+      const maxStep = maxStepRef.current;
+
+      while (cursor.step <= maxStep) {
+        const stepLines = sequences[cursor.step];
+        if (!stepLines || cursor.line >= stepLines.length) {
+          cursor.step += 1;
+          cursor.line = 0;
+          continue;
+        }
+
+        const nextLine = stepLines[cursor.line];
+        cursor.line += 1;
+        setLines((previous) => [...previous, nextLine].slice(-24));
+        break;
+      }
+    }, 380);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [active]);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+
+    element.scrollTop = element.scrollHeight;
+  }, [lines]);
+
+  return (
+    <div
+      ref={scrollRef}
+      className="h-40 space-y-0.5 overflow-y-auto font-mono text-[11px] leading-relaxed"
+      aria-label="Bearbetningslogg"
+    >
+      {lines.map((line, index) => (
+        <div key={`${line.text}-${index}`} className={terminalLineClass(line.type)}>
+          {line.text}
+        </div>
+      ))}
+      <div className="text-[#5c544a]">
+        <span className="animate-pulse">▊</span>
+      </div>
+    </div>
+  );
+}
 
 type ConverterTransferPayload = {
   previewUrl: string;
@@ -94,8 +252,61 @@ type ProcessingViewProps = {
   stepIndex: number;
 };
 
+function ProcessingAiEnhancingSteps({ stepIndex }: { stepIndex: number }) {
+  return (
+    <ul className="space-y-2.5">
+      {AI_ENHANCING_STEPS.map((step, index) => {
+        const isComplete = index < stepIndex;
+        const isActive = index === stepIndex;
+
+        return (
+          <li
+            key={step}
+            className={`flex items-center gap-2.5 text-sm transition-colors ${
+              isComplete || isActive ? "text-[#4d463f]" : "text-[#b8aea0]"
+            }`}
+          >
+            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+              {isComplete ? (
+                <Check size={14} className="text-[#5c544a]" aria-hidden="true" />
+              ) : isActive ? (
+                <Loader2 size={14} className="animate-spin text-[#5c544a]" aria-hidden="true" />
+              ) : (
+                <span className="h-1.5 w-1.5 rounded-full bg-[#d8d2c8]" aria-hidden="true" />
+              )}
+            </span>
+            <span className={isActive ? "font-medium" : undefined}>{step}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function ProcessingView({ stepIndex }: ProcessingViewProps) {
-  const progressPercent = Math.round(((stepIndex + 1) / PROCESSING_STEPS.length) * 100);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const isAiPhase = elapsedMs >= PROCESSING_TERMINAL_DURATION_MS;
+  const aiStepDuration = PROCESSING_AI_ENHANCE_DURATION_MS / AI_ENHANCING_STEPS.length;
+  const aiStepIndex = isAiPhase
+    ? Math.min(
+        AI_ENHANCING_STEPS.length - 1,
+        Math.floor((elapsedMs - PROCESSING_TERMINAL_DURATION_MS) / aiStepDuration),
+      )
+    : 0;
+  const progressPercent = Math.round(
+    (Math.min(elapsedMs, PROCESSING_MIN_DURATION_MS) / PROCESSING_MIN_DURATION_MS) * 100,
+  );
+
+  useEffect(() => {
+    const startedAt = Date.now();
+    const intervalId = window.setInterval(() => {
+      setElapsedMs(Date.now() - startedAt);
+    }, 100);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   return (
     <div
@@ -107,8 +318,14 @@ function ProcessingView({ stepIndex }: ProcessingViewProps) {
 
       <div className="w-full max-w-md space-y-6">
         <div className="space-y-2 text-center">
-          <p className="text-lg font-semibold text-[#4d463f]">Bygger din planritning</p>
-          <p className="text-sm text-[#7b746a]">{PROCESSING_STEPS[stepIndex]}...</p>
+          <p className="text-lg font-semibold text-[#4d463f]">
+            {isAiPhase ? "AI-förbättrar planritning" : "Bearbetar planritning"}
+          </p>
+          <p className="text-sm text-[#7b746a]">
+            {isAiPhase
+              ? `${AI_ENHANCING_STEPS[aiStepIndex]}...`
+              : `${PROCESSING_STEPS[stepIndex]}...`}
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -124,32 +341,11 @@ function ProcessingView({ stepIndex }: ProcessingViewProps) {
           </div>
         </div>
 
-        <ul className="space-y-2.5">
-          {PROCESSING_STEPS.map((step, index) => {
-            const isComplete = index < stepIndex;
-            const isActive = index === stepIndex;
-
-            return (
-              <li
-                key={step}
-                className={`flex items-center gap-2.5 text-sm transition-colors ${
-                  isComplete || isActive ? "text-[#4d463f]" : "text-[#b8aea0]"
-                }`}
-              >
-                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
-                  {isComplete ? (
-                    <Check size={14} className="text-[#5c544a]" aria-hidden="true" />
-                  ) : isActive ? (
-                    <Loader2 size={14} className="animate-spin text-[#5c544a]" aria-hidden="true" />
-                  ) : (
-                    <span className="h-1.5 w-1.5 rounded-full bg-[#d8d2c8]" aria-hidden="true" />
-                  )}
-                </span>
-                <span className={isActive ? "font-medium" : undefined}>{step}</span>
-              </li>
-            );
-          })}
-        </ul>
+        {isAiPhase ? (
+          <ProcessingAiEnhancingSteps stepIndex={aiStepIndex} />
+        ) : (
+          <ProcessingTerminalLog stepIndex={stepIndex} active />
+        )}
       </div>
     </div>
   );
@@ -256,7 +452,10 @@ async function resolveUploadTransferPayload(uploadId: number): Promise<Converter
 
   return {
     previewUrl: signedData.signedUrl,
-    fileName: data.file_name,
+    fileName: resolveImageDownloadFileName(data.id, {
+      mimeType: data.mime_type,
+      filePath: data.file_path,
+    }),
     uploadId: data.id,
   };
 }
@@ -321,6 +520,7 @@ function persistUploadSourceSelection(payload: ConverterTransferPayload) {
     setPendingSourceSelection({
       uploadId: payload.uploadId,
       fileName: payload.fileName,
+      ...(payload.previewUrl ? { previewUrl: payload.previewUrl } : {}),
     });
     return;
   }
@@ -333,12 +533,157 @@ function persistUploadSourceSelection(payload: ConverterTransferPayload) {
   }
 }
 
+function readInitialSourcePreviewUrl(
+  cachedReviewPreview: ReturnType<typeof readCachedReviewPreviewState>,
+  cachedSourcePreview: ReturnType<typeof readCachedSourcePreviewState>,
+) {
+  if (cachedReviewPreview.sourcePreviewUrl) {
+    return cachedReviewPreview.sourcePreviewUrl;
+  }
+
+  if (cachedSourcePreview.sourcePreviewUrl) {
+    return cachedSourcePreview.sourcePreviewUrl;
+  }
+
+  return peekTransferredSourcePreview()?.previewUrl ?? null;
+}
+
+function readInitialSourceImageId(
+  cachedReviewPreview: ReturnType<typeof readCachedReviewPreviewState>,
+  cachedSourcePreview: ReturnType<typeof readCachedSourcePreviewState>,
+) {
+  if (cachedReviewPreview.sourceImageId) {
+    return cachedReviewPreview.sourceImageId;
+  }
+
+  if (cachedSourcePreview.sourceImageId) {
+    return cachedSourcePreview.sourceImageId;
+  }
+
+  const transferredUploadId = peekTransferredSourcePreview()?.uploadId;
+  return typeof transferredUploadId === "number" ? transferredUploadId : null;
+}
+
+async function resolveSourceFileFromPreview(
+  sourcePreviewUrl: string,
+  fileName = "planritning.jpg",
+) {
+  if (sourcePreviewUrl.startsWith("data:")) {
+    return dataUrlToFile(sourcePreviewUrl);
+  }
+
+  const response = await fetch(sourcePreviewUrl, { cache: "no-store" });
+  if (!response.ok) {
+    return null;
+  }
+
+  const blob = await response.blob();
+  return new File([blob], fileName, {
+    type: blob.type || "image/jpeg",
+  });
+}
+
 function useHasPendingGenerationReview() {
   return useSyncExternalStore(
     subscribePendingGenerationReview,
     () => hasPendingGenerationReview(),
     () => false,
   );
+}
+
+function readCachedReviewPreviewState() {
+  const pendingReview = getPendingGenerationReview();
+  if (!pendingReview) {
+    return {
+      hasPendingReview: false,
+      hasCompletePreviewCache: false,
+      resultImageId: null as number | null,
+      resultImagePath: null as string | null,
+      sourceImageId: null as number | null,
+      sourcePreviewUrl: null as string | null,
+      resultPreviewUrl: null as string | null,
+      alignedSourcePreviewUrl: null as string | null,
+    };
+  }
+
+  const sourcePreviewUrl =
+    typeof pendingReview.sourcePreviewUrl === "string" && pendingReview.sourcePreviewUrl.length > 0
+      ? pendingReview.sourcePreviewUrl
+      : null;
+  const resultPreviewUrl =
+    typeof pendingReview.resultPreviewUrl === "string" && pendingReview.resultPreviewUrl.length > 0
+      ? pendingReview.resultPreviewUrl
+      : null;
+  const alignedSourcePreviewUrl =
+    typeof pendingReview.compareBeforePreviewUrl === "string" &&
+    pendingReview.compareBeforePreviewUrl.length > 0
+      ? pendingReview.compareBeforePreviewUrl
+      : null;
+
+  return {
+    hasPendingReview: true,
+    hasCompletePreviewCache: Boolean(sourcePreviewUrl && resultPreviewUrl && alignedSourcePreviewUrl),
+    resultImageId: pendingReview.resultImageId,
+    resultImagePath: pendingReview.resultImagePath,
+    sourceImageId: pendingReview.sourceImageId,
+    sourcePreviewUrl,
+    resultPreviewUrl,
+    alignedSourcePreviewUrl,
+  };
+}
+
+function readCachedSourcePreviewState() {
+  if (getPendingGenerationReview()) {
+    return {
+      hasPendingSource: false,
+      hasCompleteSourceCache: true,
+      sourcePreviewUrl: null as string | null,
+      sourceFile: null as File | null,
+      sourceImageId: null as number | null,
+    };
+  }
+
+  const pendingSource = getPendingSourceSelection();
+  if (!pendingSource) {
+    return {
+      hasPendingSource: false,
+      hasCompleteSourceCache: true,
+      sourcePreviewUrl: null as string | null,
+      sourceFile: null as File | null,
+      sourceImageId: null as number | null,
+    };
+  }
+
+  if (pendingSource.previewUrl?.startsWith("data:")) {
+    const sourceFile = dataUrlToFile(pendingSource.previewUrl);
+    return {
+      hasPendingSource: true,
+      hasCompleteSourceCache: Boolean(sourceFile),
+      sourcePreviewUrl: pendingSource.previewUrl,
+      sourceFile,
+      sourceImageId: null as number | null,
+    };
+  }
+
+  if (pendingSource.previewUrl) {
+    return {
+      hasPendingSource: true,
+      hasCompleteSourceCache: true,
+      sourcePreviewUrl: pendingSource.previewUrl,
+      sourceFile: null as File | null,
+      sourceImageId:
+        typeof pendingSource.uploadId === "number" ? pendingSource.uploadId : null,
+    };
+  }
+
+  return {
+    hasPendingSource: true,
+    hasCompleteSourceCache: false,
+    sourcePreviewUrl: null as string | null,
+    sourceFile: null as File | null,
+    sourceImageId:
+      typeof pendingSource.uploadId === "number" ? pendingSource.uploadId : null,
+  };
 }
 
 function ConverterLoadingShell() {
@@ -355,7 +700,7 @@ function ConverterLoadingShell() {
   );
 }
 
-function ComparePreviewSkeleton() {
+function ComparePreviewSkeleton({ showWatermark = false }: { showWatermark?: boolean }) {
   return (
     <div
       className="flex min-h-[420px] w-full items-center justify-center bg-[#f0ece6] px-6 py-8"
@@ -363,7 +708,9 @@ function ComparePreviewSkeleton() {
       aria-live="polite"
       aria-label="Jämförelsebilden laddas"
     >
-      <div className="h-[min(60vh,640px)] w-full max-w-2xl animate-pulse rounded-none bg-[#e0dbd3]" />
+      <div className="relative h-[min(60vh,640px)] w-full max-w-2xl animate-pulse rounded-none bg-[#e0dbd3]">
+        {showWatermark ? <WatermarkOverlay /> : null}
+      </div>
     </div>
   );
 }
@@ -397,31 +744,57 @@ export function FloorplanEnhancer() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const isPendingGenerationReview = useHasPendingGenerationReview();
+  const cachedReviewPreview = readCachedReviewPreviewState();
+  const cachedSourcePreview = readCachedSourcePreviewState();
   const [hasRestoredPendingReview, setHasRestoredPendingReview] = useState(
-    () => !hasPendingGenerationReview(),
+    () => !cachedReviewPreview.hasPendingReview || cachedReviewPreview.hasCompletePreviewCache,
   );
   const [hasRestoredPendingSource, setHasRestoredPendingSource] = useState(
-    () => !hasPendingSourceSelection(),
+    () =>
+      !cachedSourcePreview.hasPendingSource ||
+      cachedSourcePreview.hasCompleteSourceCache ||
+      Boolean(readInitialSourcePreviewUrl(cachedReviewPreview, cachedSourcePreview)),
   );
-  const [sourceFile, setSourceFile] = useState<File | null>(null);
-  const [sourcePreviewUrl, setSourcePreviewUrl] = useState<string | null>(null);
-  const [alignedSourcePreviewUrl, setAlignedSourcePreviewUrl] = useState<string | null>(null);
-  const [isSourceLoading, setIsSourceLoading] = useState(false);
-  const [resultPreviewUrl, setResultPreviewUrl] = useState<string | null>(null);
+  const [sourceFile, setSourceFile] = useState<File | null>(() => cachedSourcePreview.sourceFile);
+  const [sourcePreviewUrl, setSourcePreviewUrl] = useState<string | null>(() =>
+    readInitialSourcePreviewUrl(cachedReviewPreview, cachedSourcePreview),
+  );
+  const [alignedSourcePreviewUrl, setAlignedSourcePreviewUrl] = useState<string | null>(
+    () => cachedReviewPreview.alignedSourcePreviewUrl,
+  );
+  const [resultPreviewUrl, setResultPreviewUrl] = useState<string | null>(
+    () => cachedReviewPreview.resultPreviewUrl,
+  );
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [processingStepIndex, setProcessingStepIndex] = useState(0);
   const [errorMessage, setErrorMessage] = useState("");
-  const [resultImageId, setResultImageId] = useState<number | null>(null);
+  const [resultImageId, setResultImageId] = useState<number | null>(
+    () => cachedReviewPreview.resultImageId,
+  );
   const [showRejectForm, setShowRejectForm] = useState(false);
   const [showApproveDestinationModal, setShowApproveDestinationModal] = useState(false);
   const [rejectComment, setRejectComment] = useState("");
   const [isReviewSubmitting, setIsReviewSubmitting] = useState(false);
   const { showToast } = useToast();
-  const [resultImagePath, setResultImagePath] = useState<string | null>(null);
-  const [sourceImageId, setSourceImageId] = useState<number | null>(null);
+  const [resultImagePath, setResultImagePath] = useState<string | null>(
+    () => cachedReviewPreview.resultImagePath,
+  );
+  const [sourceImageId, setSourceImageId] = useState<number | null>(() =>
+    readInitialSourceImageId(cachedReviewPreview, cachedSourcePreview),
+  );
   const [previewImageType, setPreviewImageType] = useState<"source" | "result" | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
+  const [isCompareSliderReady, setIsCompareSliderReady] = useState(() =>
+    Boolean(
+      cachedReviewPreview.alignedSourcePreviewUrl &&
+        cachedReviewPreview.resultPreviewUrl &&
+        areCompareImagesCached(
+          cachedReviewPreview.alignedSourcePreviewUrl,
+          cachedReviewPreview.resultPreviewUrl,
+        ),
+    ),
+  );
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const pinchStartDistanceRef = useRef<number | null>(null);
@@ -449,49 +822,19 @@ export function FloorplanEnhancer() {
   }, [pathname, router, searchParams]);
 
   const applyTransferredSource = useCallback(
-    async (transferredSource: ConverterTransferPayload, isCancelled: () => boolean) => {
-      setIsSourceLoading(true);
+    (transferredSource: ConverterTransferPayload) => {
       setErrorMessage("");
       setSourceImageId(
         typeof transferredSource.uploadId === "number" ? transferredSource.uploadId : null,
       );
+      setSourceFile(null);
       setSourcePreviewUrl((previous) => {
         revokeIfObjectUrl(previous);
         return transferredSource.previewUrl;
       });
-
-      try {
-        const response = await fetch(transferredSource.previewUrl, { cache: "no-store" });
-        if (!response.ok) {
-          throw new Error("Kunde inte hämta vald bild.");
-        }
-
-        const blob = await response.blob();
-        const file = new File(
-          [blob],
-          transferredSource.fileName ?? "planritning-fran-uppladdningar.jpg",
-          {
-            type: blob.type || "image/jpeg",
-          },
-        );
-
-        if (isCancelled()) {
-          return;
-        }
-
-        setSourceFile(file);
-        clearTransferredSourcePreview();
-        clearFromUploadQuery();
-        persistUploadSourceSelection(transferredSource);
-      } catch {
-        if (!isCancelled()) {
-          setErrorMessage("Kunde inte hämta vald bild från uppladdningar. Försök igen.");
-        }
-      } finally {
-        if (!isCancelled()) {
-          setIsSourceLoading(false);
-        }
-      }
+      clearTransferredSourcePreview();
+      clearFromUploadQuery();
+      persistUploadSourceSelection(transferredSource);
     },
     [clearFromUploadQuery],
   );
@@ -539,6 +882,7 @@ export function FloorplanEnhancer() {
     setRejectComment("");
     setIsReviewSubmitting(false);
     setAlignedSourcePreviewUrl(null);
+    setIsCompareSliderReady(false);
     setResultPreviewUrl((prev) => {
       revokeIfObjectUrl(prev);
 
@@ -567,27 +911,16 @@ export function FloorplanEnhancer() {
     resetResult();
   }
 
-  useEffect(() => {
-    return () => {
-      if (!getPendingGenerationReview() && !hasPendingSourceSelection()) {
-        markStartsidaConverterForReset();
-      }
-    };
-  }, []);
-
   useLayoutEffect(() => {
-    const pendingReview = getPendingGenerationReview();
-    if (!pendingReview) {
-      setHasRestoredPendingReview(true);
-      return;
+    if (cachedReviewPreview.alignedSourcePreviewUrl) {
+      warmCompareImageSrc(cachedReviewPreview.alignedSourcePreviewUrl);
     }
 
-    setResultImageId(pendingReview.resultImageId);
-    setResultImagePath(pendingReview.resultImagePath);
-    setSourceImageId(pendingReview.sourceImageId);
-    if (pendingReview.compareBeforePreviewUrl) {
-      setAlignedSourcePreviewUrl(pendingReview.compareBeforePreviewUrl);
-      warmCompareImageSrc(pendingReview.compareBeforePreviewUrl);
+    if (cachedReviewPreview.alignedSourcePreviewUrl && cachedReviewPreview.resultPreviewUrl) {
+      warmCompareImageCache(
+        cachedReviewPreview.alignedSourcePreviewUrl,
+        cachedReviewPreview.resultPreviewUrl,
+      );
     }
   }, []);
 
@@ -601,7 +934,56 @@ export function FloorplanEnhancer() {
         return;
       }
 
-      setIsSourceLoading(true);
+      if (cachedReviewPreview.hasCompletePreviewCache) {
+        void (async () => {
+          try {
+            const [sourcePayload, signedResult] = await Promise.all([
+              resolveUploadTransferPayload(pendingReview.sourceImageId),
+              supabase.storage
+                .from(BUCKET_NAME)
+                .createSignedUrl(pendingReview.resultImagePath, 3600),
+            ]);
+
+            if (isCancelled) {
+              return;
+            }
+
+            if (
+              !sourcePayload?.previewUrl ||
+              signedResult.error ||
+              !signedResult.data?.signedUrl
+            ) {
+              return;
+            }
+
+            setSourcePreviewUrl((previous) => {
+              if (previous === sourcePayload.previewUrl) {
+                return previous;
+              }
+
+              revokeIfObjectUrl(previous);
+              return sourcePayload.previewUrl;
+            });
+            setResultPreviewUrl((previous) => {
+              if (previous === signedResult.data.signedUrl) {
+                return previous;
+              }
+
+              revokeIfObjectUrl(previous);
+              return signedResult.data.signedUrl;
+            });
+            setPendingGenerationReview({
+              ...pendingReview,
+              sourcePreviewUrl: sourcePayload.previewUrl,
+              resultPreviewUrl: signedResult.data.signedUrl,
+            });
+          } catch {
+            // Keep cached previews visible if background refresh fails.
+          }
+        })();
+        return;
+      }
+
       setErrorMessage("");
 
       try {
@@ -643,12 +1025,12 @@ export function FloorplanEnhancer() {
         setAlignedSourcePreviewUrl(restoredComparePreview);
         if (restoredComparePreview) {
           warmCompareImageCache(restoredComparePreview, signedResult.data.signedUrl);
-          if (!pendingReview.compareBeforePreviewUrl) {
-            setPendingGenerationReview({
-              ...pendingReview,
-              compareBeforePreviewUrl: restoredComparePreview,
-            });
-          }
+          setPendingGenerationReview({
+            ...pendingReview,
+            compareBeforePreviewUrl: restoredComparePreview,
+            sourcePreviewUrl: sourcePayload.previewUrl,
+            resultPreviewUrl: signedResult.data.signedUrl,
+          });
         }
       } catch {
         if (!isCancelled) {
@@ -657,7 +1039,6 @@ export function FloorplanEnhancer() {
         }
       } finally {
         if (!isCancelled) {
-          setIsSourceLoading(false);
           setHasRestoredPendingReview(true);
         }
       }
@@ -667,7 +1048,7 @@ export function FloorplanEnhancer() {
     return () => {
       isCancelled = true;
     };
-  }, []);
+  }, [cachedReviewPreview.hasCompletePreviewCache]);
 
   const isRestoringPendingReview = isPendingGenerationReview && !hasRestoredPendingReview;
   const isRestoringPendingSource = hasPendingSourceSelection() && !hasRestoredPendingSource;
@@ -675,6 +1056,13 @@ export function FloorplanEnhancer() {
     Boolean(resultPreviewUrl && sourcePreviewUrl) || isRestoringPendingReview;
   const isComparePreviewLoading =
     showGenerationReview && (!resultPreviewUrl || !sourcePreviewUrl || !alignedSourcePreviewUrl);
+  const isCompareReviewReady = Boolean(
+    alignedSourcePreviewUrl && resultPreviewUrl && isCompareSliderReady,
+  );
+
+  const handleCompareSliderReadyChange = useCallback((ready: boolean) => {
+    setIsCompareSliderReady(ready);
+  }, []);
 
   useEffect(() => {
     if (alignedSourcePreviewUrl && resultPreviewUrl) {
@@ -696,13 +1084,16 @@ export function FloorplanEnhancer() {
         return;
       }
 
+      if (cachedSourcePreview.hasCompleteSourceCache) {
+        return;
+      }
+
       const pendingSource = getPendingSourceSelection();
       if (!pendingSource) {
         setHasRestoredPendingSource(true);
         return;
       }
 
-      setIsSourceLoading(true);
       setErrorMessage("");
 
       try {
@@ -713,7 +1104,7 @@ export function FloorplanEnhancer() {
             return;
           }
 
-          await applyTransferredSource(payload, () => isCancelled);
+          applyTransferredSource(payload);
           return;
         }
 
@@ -741,7 +1132,6 @@ export function FloorplanEnhancer() {
         }
       } finally {
         if (!isCancelled) {
-          setIsSourceLoading(false);
           setHasRestoredPendingSource(true);
         }
       }
@@ -778,7 +1168,7 @@ export function FloorplanEnhancer() {
       }
 
       if (transferredSource?.previewUrl) {
-        await applyTransferredSource(transferredSource, () => isCancelled);
+        applyTransferredSource(transferredSource);
       }
     }
 
@@ -831,7 +1221,7 @@ export function FloorplanEnhancer() {
     setIsDragActive(false);
   }
 
-  async function processImage(file: File) {
+  async function processImage(file?: File) {
     if (isSubmitting) {
       return;
     }
@@ -842,8 +1232,24 @@ export function FloorplanEnhancer() {
     const processingStartedAt = Date.now();
 
     try {
+      let resolvedFile = file ?? sourceFile;
+      if (!resolvedFile && sourcePreviewUrl) {
+        const pendingSource = getPendingSourceSelection();
+        resolvedFile = await resolveSourceFileFromPreview(
+          sourcePreviewUrl,
+          pendingSource?.fileName ?? "planritning.jpg",
+        );
+        if (resolvedFile) {
+          setSourceFile(resolvedFile);
+        }
+      }
+
+      if (!resolvedFile) {
+        throw new Error("Kunde inte läsa bilden igen. Ladda upp bilden på nytt.");
+      }
+
       const payload = new FormData();
-      payload.append("file", file);
+      payload.append("file", resolvedFile);
       if (sourceImageId) {
         payload.append("sourceImageId", String(sourceImageId));
       }
@@ -907,6 +1313,8 @@ export function FloorplanEnhancer() {
           resultImagePath: savedImagePath,
           sourceImageId: parsedSourceImageId,
           compareBeforePreviewUrl: compareBeforeDataUrl,
+          sourcePreviewUrl: sourcePreviewUrl ?? undefined,
+          resultPreviewUrl: nextResultPreviewUrl,
         });
       }
       window.dispatchEvent(new Event("library-updated"));
@@ -924,21 +1332,7 @@ export function FloorplanEnhancer() {
       return;
     }
 
-    if (!sourceFile && sourcePreviewUrl?.startsWith("data:")) {
-      const restoredFile = dataUrlToFile(sourcePreviewUrl);
-      if (restoredFile) {
-        setSourceFile(restoredFile);
-        void processImage(restoredFile);
-        return;
-      }
-    }
-
-    if (!sourceFile) {
-      setErrorMessage("Kunde inte läsa bilden igen. Ladda upp bilden på nytt.");
-      return;
-    }
-
-    void processImage(sourceFile);
+    void processImage();
   }
 
   async function submitGenerationReview(
@@ -1320,7 +1714,13 @@ export function FloorplanEnhancer() {
             <figure className="mx-auto w-fit max-w-full overflow-hidden rounded-none border border-[#d8d2c8] bg-white">
               <figcaption className="flex items-center justify-between gap-3 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
                 <span className="text-xs font-semibold uppercase tracking-wide text-[#7b746a]">Original</span>
-                <button
+                <div className="flex items-center gap-2">
+                  {sourceImageId ? (
+                    <span className="text-xs font-semibold text-[#6a6258]">
+                      {imageDisplayName(sourceImageId)}
+                    </span>
+                  ) : null}
+                  <button
                   type="button"
                   onClick={leavePreview}
                   disabled={isSubmitting}
@@ -1329,6 +1729,7 @@ export function FloorplanEnhancer() {
                 >
                   <X size={14} aria-hidden="true" />
                 </button>
+                </div>
               </figcaption>
               <Image
                 src={sourcePreviewUrl}
@@ -1344,7 +1745,7 @@ export function FloorplanEnhancer() {
                   <button
                     type="button"
                     onClick={startConversion}
-                    disabled={isSubmitting || !sourceFile}
+                    disabled={isSubmitting || !sourcePreviewUrl}
                     className="rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Försök igen
@@ -1353,14 +1754,10 @@ export function FloorplanEnhancer() {
                 <button
                   type="button"
                   onClick={startConversion}
-                  disabled={isSubmitting || isSourceLoading || !sourceFile}
+                  disabled={isSubmitting || !sourcePreviewUrl}
                   className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isSubmitting
-                    ? "Konverterar..."
-                    : isSourceLoading
-                      ? "Laddar bild..."
-                      : "Starta konvertering"}
+                  {isSubmitting ? "Konverterar..." : "Starta konvertering"}
                 </button>
               </div>
             </figure>
@@ -1369,7 +1766,7 @@ export function FloorplanEnhancer() {
           {showGenerationReview ? (
             <figure
               className={`mx-auto overflow-hidden rounded-none border border-[#d8d2c8] bg-white leading-none ${
-                isComparePreviewLoading ? "w-full max-w-3xl" : "w-fit max-w-full"
+                isCompareReviewReady ? "w-fit max-w-full" : "w-full max-w-3xl"
               }`}
             >
               <figcaption className="flex items-center justify-between gap-3 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
@@ -1377,23 +1774,23 @@ export function FloorplanEnhancer() {
                   Före / Efter
                 </span>
                 {resultImageId ? (
-                  <span className="text-xs font-semibold text-[#6a6258]">Bild {resultImageId}</span>
+                  <span className="text-xs font-semibold text-[#6a6258]">{imageDisplayName(resultImageId)}</span>
                 ) : null}
               </figcaption>
               {isComparePreviewLoading ? (
-                <ComparePreviewSkeleton />
+                <ComparePreviewSkeleton showWatermark={protectResultPreview} />
               ) : alignedSourcePreviewUrl && resultPreviewUrl ? (
                 <ImageCompareSlider
                   beforeSrc={alignedSourcePreviewUrl}
                   afterSrc={resultPreviewUrl}
                   beforeAlt="Original planritning"
                   afterAlt="Bearbetad planritning"
-                  onClick={openResultPreview}
-                  className="cursor-zoom-in"
                   protectAfterImage={protectResultPreview}
+                  loadingFallback={<ComparePreviewSkeleton showWatermark={protectResultPreview} />}
+                  onReadyChange={handleCompareSliderReadyChange}
                 />
               ) : null}
-              {!isComparePreviewLoading && alignedSourcePreviewUrl && showRejectForm ? (
+              {isCompareReviewReady && alignedSourcePreviewUrl && showRejectForm ? (
                 <div className="space-y-3 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4">
                   <p className="text-sm font-medium text-[#5c544a]">
                     Berätta varför bilden nekas så att vi kan förbättra resultatet.
@@ -1425,7 +1822,7 @@ export function FloorplanEnhancer() {
                     </button>
                   </div>
                 </div>
-              ) : !isComparePreviewLoading && alignedSourcePreviewUrl ? (
+              ) : isCompareReviewReady && alignedSourcePreviewUrl ? (
                 <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4">
                   <p className="mb-3 text-center text-sm font-medium text-[#5c544a]">
                     Godkänner du den bearbetade bilden?

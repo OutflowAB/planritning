@@ -2,6 +2,7 @@
 
 import { ReactNode } from "react";
 
+import { StartsidaConverterProvider } from "@/components/dashboard/startsida-converter-host";
 import { ToastProvider } from "@/components/ui/toast-provider";
 
 type ProvidersProps = {
@@ -9,5 +10,9 @@ type ProvidersProps = {
 };
 
 export function Providers({ children }: ProvidersProps) {
-  return <ToastProvider>{children}</ToastProvider>;
+  return (
+    <ToastProvider>
+      <StartsidaConverterProvider>{children}</StartsidaConverterProvider>
+    </ToastProvider>
+  );
 }

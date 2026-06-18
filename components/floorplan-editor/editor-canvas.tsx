@@ -96,6 +96,7 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
   const paintGenerationRef = useRef(0);
   const pinchStateRef = useRef<{ distance: number; zoom: number } | null>(null);
   const zoomAnchorRef = useRef<ZoomAnchor | null>(null);
+  const lastEraserPointerRef = useRef<{ clientX: number; clientY: number } | null>(null);
   const layoutSnapshotRef = useRef<LayoutSnapshot>({
     displaySize: { width: 0, height: 0 },
     boxLeft: 0,
@@ -114,6 +115,23 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
   controllerRef.current = controller;
 
   const isEraserActive = controller.activeTool === "eraser";
+
+  function syncEraserCursorFromPointer(
+    pointer: { clientX: number; clientY: number },
+    visible = true,
+  ) {
+    const canvas = controllerRef.current.canvasRef.current;
+    const wrapper = canvasWrapperRef.current;
+    if (!canvas || !wrapper) {
+      return;
+    }
+
+    const metrics = getEraserCursorMetrics(canvas, wrapper, pointer);
+    setEraserCursor({
+      ...metrics,
+      visible,
+    });
+  }
 
   const contentWidth = Math.max(
     displaySize.width + CANVAS_PADDING_PX * 2,
@@ -183,6 +201,7 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
     canvas.on("mouse:down", handleMouseDown);
 
     return () => {
+      paintGenerationRef.current += 1;
       canvas.off("mouse:down", handleMouseDown);
       snapping.dispose();
       controllerRef.current.registerCanvas(null);
@@ -216,14 +235,15 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
     }
 
     function handleMouseMove(options: { e: MouseEvent }) {
-      const metrics = getEraserCursorMetrics(canvas, wrapper, options.e);
-      setEraserCursor({
-        ...metrics,
-        visible: true,
-      });
+      lastEraserPointerRef.current = {
+        clientX: options.e.clientX,
+        clientY: options.e.clientY,
+      };
+      syncEraserCursorFromPointer(options.e);
     }
 
     function hideEraserCursor() {
+      lastEraserPointerRef.current = null;
       setEraserCursor((previous) =>
         previous.visible ? { ...previous, visible: false } : previous,
       );
@@ -430,7 +450,12 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
     }
 
     currentController.applyDisplayScale(displaySize);
-  }, [displaySize.height, displaySize.width]);
+
+    const lastPointer = lastEraserPointerRef.current;
+    if (isEraserActive && lastPointer) {
+      syncEraserCursorFromPointer(lastPointer);
+    }
+  }, [displaySize.height, displaySize.width, isEraserActive]);
 
   useEffect(() => {
     const currentController = controllerRef.current;
@@ -447,14 +472,22 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
     const generation = ++paintGenerationRef.current;
 
     async function paint() {
+      const canvas = currentController.canvasRef.current;
+      if (!canvas) {
+        return;
+      }
+
       currentController.applyDisplayScale(displaySize);
       await currentController.renderCanvas();
-      if (!active || generation !== paintGenerationRef.current) {
+      if (
+        !active ||
+        generation !== paintGenerationRef.current ||
+        currentController.canvasRef.current !== canvas
+      ) {
         return;
       }
       currentController.applyDisplayScale(displaySize);
-      const canvas = currentController.canvasRef.current;
-      if (canvas) {
+      if (currentController.canvasRef.current) {
         configureCanvasSelectionStyle(canvas);
         configureCanvasToolMode(canvas, currentController.activeTool);
       }
@@ -510,7 +543,7 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
           {isEraserActive && eraserCursor.visible && eraserCursor.size > 0 ? (
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute z-10 box-border"
+              className="pointer-events-none absolute z-10 box-border rounded-full"
               style={{
                 width: eraserCursor.size,
                 height: eraserCursor.size,

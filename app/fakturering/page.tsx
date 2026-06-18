@@ -1,15 +1,19 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Check, ChevronLeft, ChevronRight } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
+import { Check, ChevronLeft, ChevronRight, Loader2, Minus, Plus, X } from "lucide-react";
+import { TouchEvent, WheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { supabase } from "@/lib/supabase";
+import { imageDisplayName } from "@/lib/image-naming";
 
-const SEK_PER_GENERATION = 80;
+const SEK_PER_GENERATION = 50;
+const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
 const GENERATED_PREFIX = "generated/";
+const MIN_PREVIEW_ZOOM = 0.5;
+const MAX_PREVIEW_ZOOM = 4;
+const PREVIEW_ZOOM_STEP = 0.5;
 
 type PeriodKey = "today" | "current_week" | "current_month";
 
@@ -50,8 +54,6 @@ type GenerationLogRow = {
 };
 
 export default function FaktureringPage() {
-  const pathname = usePathname();
-  const bibliotekPath = pathname.startsWith("/admin") ? "/admin/bibliotek" : "/bibliotek";
   const [selectedPeriod, setSelectedPeriod] = useState<PeriodKey>("current_month");
   const [periodOffset, setPeriodOffset] = useState(0);
   const [isPeriodMenuOpen, setIsPeriodMenuOpen] = useState(false);
@@ -59,7 +61,13 @@ export default function FaktureringPage() {
   const [generationLogs, setGenerationLogs] = useState<GenerationLogRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [previewLog, setPreviewLog] = useState<GenerationLogRow | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewZoom, setPreviewZoom] = useState(1);
   const periodMenuRef = useRef<HTMLDivElement | null>(null);
+  const pinchStartDistanceRef = useRef<number | null>(null);
+  const pinchStartZoomRef = useRef<number>(1);
 
   const totalCostSek = generationCount * SEK_PER_GENERATION;
 
@@ -173,6 +181,111 @@ export default function FaktureringPage() {
     document.addEventListener("click", handleOutsideClick);
     return () => document.removeEventListener("click", handleOutsideClick);
   }, []);
+
+  useEffect(() => {
+    if (!previewLog) {
+      return;
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        closeImagePreview();
+      }
+    }
+
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [previewLog]);
+
+  async function openImagePreview(log: GenerationLogRow) {
+    setPreviewLog(log);
+    setPreviewZoom(1);
+    setPreviewUrl(null);
+    setIsPreviewLoading(true);
+
+    const { data, error } = await supabase.storage
+      .from(BUCKET_NAME)
+      .createSignedUrl(log.file_path, 3600);
+
+    if (error || !data?.signedUrl) {
+      setPreviewLog(null);
+      setIsPreviewLoading(false);
+      return;
+    }
+
+    setPreviewUrl(data.signedUrl);
+    setIsPreviewLoading(false);
+  }
+
+  function closeImagePreview() {
+    setPreviewLog(null);
+    setPreviewUrl(null);
+    setPreviewZoom(1);
+    setIsPreviewLoading(false);
+  }
+
+  function zoomPreviewIn() {
+    setPreviewZoom((previous) =>
+      Math.min(MAX_PREVIEW_ZOOM, Number((previous + PREVIEW_ZOOM_STEP).toFixed(2))),
+    );
+  }
+
+  function zoomPreviewOut() {
+    setPreviewZoom((previous) =>
+      Math.max(MIN_PREVIEW_ZOOM, Number((previous - PREVIEW_ZOOM_STEP).toFixed(2))),
+    );
+  }
+
+  function getTouchDistance(
+    touchA: Pick<TouchEvent<HTMLDivElement>["touches"][number], "clientX" | "clientY">,
+    touchB: Pick<TouchEvent<HTMLDivElement>["touches"][number], "clientX" | "clientY">,
+  ) {
+    const deltaX = touchA.clientX - touchB.clientX;
+    const deltaY = touchA.clientY - touchB.clientY;
+    return Math.hypot(deltaX, deltaY);
+  }
+
+  function handlePreviewTouchStart(event: TouchEvent<HTMLDivElement>) {
+    if (event.touches.length !== 2) {
+      return;
+    }
+
+    pinchStartDistanceRef.current = getTouchDistance(event.touches[0], event.touches[1]);
+    pinchStartZoomRef.current = previewZoom;
+  }
+
+  function handlePreviewTouchMove(event: TouchEvent<HTMLDivElement>) {
+    if (event.touches.length !== 2 || !pinchStartDistanceRef.current) {
+      return;
+    }
+
+    event.preventDefault();
+    const currentDistance = getTouchDistance(event.touches[0], event.touches[1]);
+    const relativeScale = currentDistance / pinchStartDistanceRef.current;
+    const nextZoom = pinchStartZoomRef.current * relativeScale;
+    const clampedZoom = Math.min(MAX_PREVIEW_ZOOM, Math.max(MIN_PREVIEW_ZOOM, nextZoom));
+    setPreviewZoom(Number(clampedZoom.toFixed(2)));
+  }
+
+  function handlePreviewTouchEnd(event: TouchEvent<HTMLDivElement>) {
+    if (event.touches.length < 2) {
+      pinchStartDistanceRef.current = null;
+    }
+  }
+
+  function handlePreviewWheel(event: WheelEvent<HTMLDivElement>) {
+    if (!event.ctrlKey) {
+      return;
+    }
+
+    event.preventDefault();
+    const zoomDelta = -event.deltaY * 0.01;
+    setPreviewZoom((previous) => {
+      const next = previous + zoomDelta;
+      const clamped = Math.min(MAX_PREVIEW_ZOOM, Math.max(MIN_PREVIEW_ZOOM, next));
+      return Number(clamped.toFixed(2));
+    });
+  }
 
   return (
     <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
@@ -303,28 +416,107 @@ export default function FaktureringPage() {
             {!isLoading && generationLogs.length > 0 ? (
               <div className="divide-y divide-[#e8e2d8]">
                 {generationLogs.map((log) => (
-                  <Link
+                  <button
                     key={log.id}
-                    href={`${bibliotekPath}?imageId=${log.id}&imagePath=${encodeURIComponent(log.file_path)}&previewImageId=${log.id}&previewImagePath=${encodeURIComponent(log.file_path)}`}
-                    className="flex items-center justify-between gap-3 px-4 py-3 text-sm transition hover:bg-[#f2ede5]"
+                    type="button"
+                    onClick={() => void openImagePreview(log)}
+                    className="flex w-full cursor-zoom-in items-center justify-between gap-3 px-4 py-3 text-left text-sm transition hover:bg-[#f2ede5]"
                   >
                     <div className="min-w-0">
-                      <p className="truncate font-medium text-[#3d3a36]">
-                        Bild {log.id} - {log.file_name}
-                      </p>
+                      <p className="truncate font-medium text-[#3d3a36]">{imageDisplayName(log.id)}</p>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-xs text-[#7b746a]">
                         {new Date(log.created_at).toLocaleString("sv-SE")}
                       </p>
                     </div>
-                  </Link>
+                  </button>
                 ))}
               </div>
             ) : null}
           </div>
         ) : null}
       </div>
+
+      {previewLog ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-6"
+          onClick={closeImagePreview}
+          role="presentation"
+        >
+          <div
+            className="relative flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-none border border-[#d8d2c8] bg-white shadow-[0_12px_40px_rgba(0,0,0,0.35)]"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Förhandsvisning av ${imageDisplayName(previewLog.id)}`}
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={zoomPreviewOut}
+                  disabled={previewZoom <= MIN_PREVIEW_ZOOM || isPreviewLoading}
+                  aria-label="Zooma ut"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Minus size={15} aria-hidden="true" />
+                </button>
+                <span className="w-14 shrink-0 text-center text-xs font-semibold text-[#6a6258]">
+                  {Math.round(previewZoom * 100)}%
+                </span>
+                <button
+                  type="button"
+                  onClick={zoomPreviewIn}
+                  disabled={previewZoom >= MAX_PREVIEW_ZOOM || isPreviewLoading}
+                  aria-label="Zooma in"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Plus size={15} aria-hidden="true" />
+                </button>
+                <span className="truncate text-xs font-semibold text-[#6a6258]">
+                  {imageDisplayName(previewLog.id)}
+                </span>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeImagePreview}
+                aria-label="Stäng bildvisning"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5]"
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="relative flex-1 overflow-auto bg-[#f0ece6] p-4">
+              <div className="mx-auto flex min-h-[50vh] w-full items-center justify-center">
+                {isPreviewLoading || !previewUrl ? (
+                  <Loader2 size={28} className="animate-spin text-[#7b746a]" aria-hidden="true" />
+                ) : (
+                  <div
+                    className="touch-none select-none"
+                    onTouchStart={handlePreviewTouchStart}
+                    onTouchMove={handlePreviewTouchMove}
+                    onTouchEnd={handlePreviewTouchEnd}
+                    onTouchCancel={handlePreviewTouchEnd}
+                    onWheel={handlePreviewWheel}
+                  >
+                    <Image
+                      src={previewUrl}
+                      alt={imageDisplayName(previewLog.id)}
+                      width={2200}
+                      height={1600}
+                      className="h-auto max-h-[calc(90vh-120px)] w-auto max-w-full border border-[#d8d2c8] bg-white object-contain transition-transform duration-150"
+                      style={{ transform: `scale(${previewZoom})`, transformOrigin: "center center" }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

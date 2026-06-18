@@ -64,7 +64,35 @@ async function exportFromDocument(
   floorplanDocument: FloorplanDocument,
   input: ExportLibraryFloorplanInput,
 ) {
-  const imageUrl = buildFloorplanImageUrl(input.imageId, input.imagePath);
+  const canvas = await createDocumentRenderCanvas(floorplanDocument, input.imageId, input.imagePath);
+
+  try {
+    await exportCanvasToFormat(canvas, input.format, input.fileName);
+  } finally {
+    canvas.dispose();
+  }
+}
+
+export async function renderFloorplanDocumentToPngDataUrl(
+  floorplanDocument: FloorplanDocument,
+  imageId: number,
+  imagePath: string,
+) {
+  const canvas = await createDocumentRenderCanvas(floorplanDocument, imageId, imagePath);
+
+  try {
+    return canvas.toDataURL({ format: "png", multiplier: 1 });
+  } finally {
+    canvas.dispose();
+  }
+}
+
+async function createDocumentRenderCanvas(
+  floorplanDocument: FloorplanDocument,
+  imageId: number,
+  imagePath: string,
+) {
+  const imageUrl = buildFloorplanImageUrl(imageId, imagePath);
   const canvasElement = window.document.createElement("canvas");
   const canvas = new Canvas(canvasElement, {
     width: floorplanDocument.canvas.width,
@@ -72,13 +100,9 @@ async function exportFromDocument(
     renderOnAddRemove: false,
   });
 
-  try {
-    await renderDocumentToCanvas(canvas, floorplanDocument, imageUrl);
-    canvas.renderAll();
-    await exportCanvasToFormat(canvas, input.format, input.fileName);
-  } finally {
-    canvas.dispose();
-  }
+  await renderDocumentToCanvas(canvas, floorplanDocument, imageUrl);
+  canvas.renderAll();
+  return canvas;
 }
 
 async function exportFromImageUrl(

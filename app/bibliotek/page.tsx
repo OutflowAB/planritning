@@ -1,7 +1,17 @@
 "use client";
 
 import Image from "next/image";
-import { ChevronDown, Download, Loader2, Minus, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import {
+  ChevronDown,
+  Download,
+  Loader2,
+  Minus,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Trash2,
+  X,
+} from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { TouchEvent, WheelEvent, useEffect, useRef, useState } from "react";
 
@@ -10,6 +20,7 @@ import {
   exportLibraryFloorplan,
   type LibraryExportFormat,
 } from "@/lib/floorplan/export-library";
+import { imageDisplayName, imageDownloadBaseName } from "@/lib/image-naming";
 import { supabase } from "@/lib/supabase";
 import { buildVerktygHref, setPendingVerktygSave } from "@/lib/verktyg-save-session";
 
@@ -291,7 +302,7 @@ export default function BibliotekPage() {
       await exportLibraryFloorplan({
         imageId: previewImage.id,
         imagePath: previewImage.file_path,
-        fileName: previewImage.file_name,
+        fileName: imageDownloadBaseName(previewImage.id),
         format,
         fallbackUrl: previewImage.preview_url,
       });
@@ -465,12 +476,15 @@ export default function BibliotekPage() {
     const pathsToSign: string[] = [];
 
     imagePaths.forEach((path) => {
-      const cached = previewCache.get(path);
-      if (cached) {
-        previewByPath.set(path, cached.url);
-      } else {
-        pathsToSign.push(path);
+      if (!forceRefresh) {
+        const cached = previewCache.get(path);
+        if (cached) {
+          previewByPath.set(path, cached.url);
+          return;
+        }
       }
+
+      pathsToSign.push(path);
     });
 
     if (pathsToSign.length > 0) {
@@ -697,7 +711,7 @@ export default function BibliotekPage() {
                     >
                       <Image
                         src={image.preview_url}
-                        alt={image.file_name}
+                        alt={imageDisplayName(image.id)}
                         width={1200}
                         height={900}
                         className="max-h-[220px] w-auto max-w-full rounded-none border border-[#d8d2c8] bg-white object-contain"
@@ -729,7 +743,7 @@ export default function BibliotekPage() {
           >
             <div className="relative z-20 flex flex-wrap items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
               <div className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-xs font-semibold text-[#6a6258]">
-                Bild {previewImage.id}
+                {imageDisplayName(previewImage.id)}
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -830,7 +844,7 @@ export default function BibliotekPage() {
                 >
                   <Image
                     src={previewImage.preview_url}
-                    alt={previewImage.file_name}
+                    alt={imageDisplayName(previewImage.id)}
                     width={2200}
                     height={1600}
                     className="h-auto max-h-[calc(90vh-190px)] w-auto max-w-full border border-[#d8d2c8] bg-white object-contain transition-transform duration-150"
@@ -845,9 +859,19 @@ export default function BibliotekPage() {
                 type="button"
                 onClick={() => void sendBackToVerktyg()}
                 disabled={isSendingToVerktyg}
-                className="inline-flex h-8 items-center rounded-none border border-[#d8d2c8] bg-white px-3 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-3 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isSendingToVerktyg ? "Skickar..." : "Skicka till verktyg igen"}
+                {isSendingToVerktyg ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    Redigerar...
+                  </>
+                ) : (
+                  <>
+                    <Pencil size={13} aria-hidden="true" />
+                    Redigera
+                  </>
+                )}
               </button>
             </div>
           </div>

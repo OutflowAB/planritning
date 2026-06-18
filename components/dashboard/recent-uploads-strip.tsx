@@ -6,6 +6,7 @@ import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { supabase } from "@/lib/supabase";
+import { imageDisplayName } from "@/lib/image-naming";
 
 const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
@@ -118,7 +119,7 @@ export function RecentUploadsStrip() {
                 {upload.preview_url ? (
                   <Image
                     src={upload.preview_url}
-                    alt={upload.file_name}
+                    alt={imageDisplayName(upload.id)}
                     width={640}
                     height={480}
                     className="max-h-[160px] w-auto max-w-full object-contain"
@@ -131,7 +132,7 @@ export function RecentUploadsStrip() {
               </div>
               <div className="border-t border-slate-200 px-3 py-2.5">
                 <p className="truncate text-sm font-medium text-slate-800 group-hover:text-slate-900">
-                  {upload.file_name}
+                  {imageDisplayName(upload.id)}
                 </p>
                 <p className="mt-0.5 text-xs text-slate-500">
                   {new Date(upload.created_at).toLocaleString("sv-SE")}

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { supabase } from "@/lib/supabase";
 
-const IMAGE_GENERATION_COST_SEK = 80;
+const IMAGE_GENERATION_COST_SEK = 50;
 const GENERATED_UPLOADS_PREFIX = "generated/";
 
 type StatCardProps = {

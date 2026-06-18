@@ -23,6 +23,7 @@ import {
   floorplanObjectFromFabric,
   getFloorplanMeta,
   hasFloorplanBackground,
+  isCanvasOperational,
   renderDocumentToCanvas,
   sortFloorplanObjectsByLayer,
   syncCanvasToDocument,
@@ -38,6 +39,9 @@ import {
 } from "@/lib/floorplan/history";
 import { getFurnitureById, getSymbolById } from "@/lib/floorplan/symbol-library";
 import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
+import { renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-library";
+import { publishFloorplanImage } from "@/lib/floorplan/publish-floorplan";
+import { imageDownloadBaseName } from "@/lib/image-naming";
 import { snapFloorplanObjectPosition } from "@/lib/floorplan/fabric/object-snapping";
 import type { EditorTool, FloorplanDocument, FloorplanObject } from "@/lib/floorplan/types";
 import { createObjectId } from "@/lib/floorplan/types";
@@ -139,7 +143,7 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
   const renderCanvas = useCallback(async () => {
     const canvas = canvasRef.current;
     const currentDocument = documentRef.current;
-    if (!canvas || !currentDocument) {
+    if (!isCanvasOperational(canvas) || !currentDocument) {
       return;
     }
 
@@ -151,6 +155,9 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
     try {
       await renderDocumentToCanvas(canvas, currentDocument, imageUrl);
     } catch (error) {
+      if (!isCanvasOperational(canvasRef.current)) {
+        return;
+      }
       onError(error instanceof Error ? error.message : "Kunde inte visa planritningsbilden.");
       throw error;
     }
@@ -243,7 +250,7 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
           nextDocument = createEmptyDocument({
             imageId: approvedImage.id,
             imagePath: approvedImage.file_path,
-            fileName: approvedImage.file_name,
+            fileName: imageDownloadBaseName(approvedImage.id),
             canvasWidth: canvasSize.width,
             canvasHeight: canvasSize.height,
           });
@@ -290,7 +297,7 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
   const applyDisplayScale = useCallback(
     (size: { width: number; height: number }) => {
       const canvas = canvasRef.current;
-      if (!canvas || size.width <= 0 || size.height <= 0) {
+      if (!isCanvasOperational(canvas) || size.width <= 0 || size.height <= 0) {
         return;
       }
 
@@ -662,6 +669,31 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
     }
   }, [approvedImage.file_path, approvedImage.id, document, onError]);
 
+  const publishFlattenedImage = useCallback(async () => {
+    const canvas = canvasRef.current;
+    const currentDocument = documentRef.current;
+    if (!canvas || !currentDocument || currentDocument.objects.length === 0) {
+      return true;
+    }
+
+    const latestDocument = syncCanvasToDocument(canvas, currentDocument);
+    const pngDataUrl = await renderFloorplanDocumentToPngDataUrl(
+      latestDocument,
+      approvedImage.id,
+      approvedImage.file_path,
+    );
+
+    await publishFloorplanImage({
+      imageId: approvedImage.id,
+      imagePath: approvedImage.file_path,
+      pngDataUrl,
+    });
+
+    skipPersistRef.current = true;
+    setIsDirty(false);
+    return true;
+  }, [approvedImage.file_path, approvedImage.id]);
+
   const discardDocumentChanges = useCallback(async () => {
     skipPersistRef.current = true;
     setIsDirty(false);
@@ -849,6 +881,7 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
     canRedo: history ? canRedo(history) : false,
     canResetToOriginal,
     saveDocument,
+    publishFlattenedImage,
     discardDocumentChanges,
     renderCanvas,
     applyDisplayScale,

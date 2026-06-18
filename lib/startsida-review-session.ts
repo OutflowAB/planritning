@@ -5,6 +5,8 @@ export type PendingGenerationReview = {
   resultImagePath: string;
   sourceImageId: number;
   compareBeforePreviewUrl?: string;
+  sourcePreviewUrl?: string;
+  resultPreviewUrl?: string;
 };
 
 export function getPendingGenerationReview(): PendingGenerationReview | null {
@@ -35,6 +37,12 @@ export function getPendingGenerationReview(): PendingGenerationReview | null {
       ...(typeof parsed.compareBeforePreviewUrl === "string" &&
       parsed.compareBeforePreviewUrl.length > 0
         ? { compareBeforePreviewUrl: parsed.compareBeforePreviewUrl }
+        : {}),
+      ...(typeof parsed.sourcePreviewUrl === "string" && parsed.sourcePreviewUrl.length > 0
+        ? { sourcePreviewUrl: parsed.sourcePreviewUrl }
+        : {}),
+      ...(typeof parsed.resultPreviewUrl === "string" && parsed.resultPreviewUrl.length > 0
+        ? { resultPreviewUrl: parsed.resultPreviewUrl }
         : {}),
     };
   } catch {
