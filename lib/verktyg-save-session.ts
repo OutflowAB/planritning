@@ -70,8 +70,8 @@ export function buildVerktygHref(
   return `${basePath}?${params.toString()}`;
 }
 
-export function buildVerktygListHref(pathname: string) {
-  return pathname.startsWith("/admin") ? "/admin/verktyg" : "/verktyg";
+export function buildPlanritningarListHref(pathname: string) {
+  return pathname.startsWith("/admin") ? "/admin/planritningar" : "/planritningar";
 }
 
 export function buildPlanritningarHref(

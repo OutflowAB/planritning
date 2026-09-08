@@ -1,23 +1,23 @@
 import sharp from "sharp";
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
-import path from "node:path";
 
-import { COMPARE_RESPONSE_CONTENT_TYPE, packCompareResponse } from "@/lib/floorplan-compare-layout";
+import {
+  CONVERT_STREAM_CONTENT_TYPE,
+  encodeSseEvent,
+  type ConvertEngine,
+  type ConvertStreamEvent,
+} from "@/lib/floorplan/convert-stream";
 import { imageDownloadFileName } from "@/lib/image-naming";
-import { cropToMainContent } from "@/lib/image/smart-crop";
+import { generateFloorplanLineArt, resolveImageEngine } from "@/lib/image/ai-floorplan";
+import {
+  buildCompareBefore,
+  composeBrandedFloorplan,
+  prepareSourceImage,
+  sampleDominantColor,
+  type Rgb,
+} from "@/lib/image/brand-floorplan";
 
-const TARGET_MAX_WIDTH = 1200;
-const LINE_THRESHOLD = 190;
-const ASPECT_RATIO_WIDTH = 7;
-const ASPECT_RATIO_HEIGHT = 5;
-const CONTENT_PADDING_PX = 80;
-const LOGO_GAP_PX = 44;
-const OUTER_FRAME_STROKE_PX = 3;
-const OUTER_FRAME_INSET_PX = 30;
-const LOGO_MAX_WIDTH_PX = 360;
-const LOGO_WIDTH_RATIO = 0.3;
-const BEIGE_BACKGROUND = { r: 225, g: 212, b: 200, alpha: 1 };
 const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
 const GENERATION_EVENTS_TABLE = "generation_events";
@@ -25,6 +25,9 @@ const GENERATED_PREFIX = "generated/";
 const UPLOADS_PREFIX = "uploads/";
 
 export const runtime = "nodejs";
+
+/** Image generation with reference images can take up to two minutes. */
+export const maxDuration = 300;
 
 function createSupabaseServerClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -137,261 +140,252 @@ async function resolveSourceUploadId(
   };
 }
 
+function toPngDataUrl(buffer: Buffer) {
+  return `data:image/png;base64,${buffer.toString("base64")}`;
+}
+
+class ConvertFailure extends Error {}
+
 export async function POST(request: Request) {
-  try {
-    const formData = await request.formData();
-    const uploadedFile = formData.get("file");
-    const sourceImageIdValue = formData.get("sourceImageId");
+  const formData = await request.formData();
+  const uploadedFile = formData.get("file");
+  const sourceImageIdValue = formData.get("sourceImageId");
 
-    if (!(uploadedFile instanceof File)) {
-      return NextResponse.json({ message: "Ingen bildfil skickades." }, { status: 400 });
-    }
-
-    if (!uploadedFile.type.startsWith("image/")) {
-      return NextResponse.json({ message: "Filen måste vara en bild." }, { status: 400 });
-    }
-
-    const inputBuffer = Buffer.from(await uploadedFile.arrayBuffer());
-
-    const orientedColorBuffer = await sharp(inputBuffer)
-      .rotate()
-      .resize({
-        width: TARGET_MAX_WIDTH,
-        withoutEnlargement: true,
-      })
-      .png()
-      .toBuffer();
-
-    const thresholdedImageBuffer = await sharp(orientedColorBuffer)
-      .grayscale()
-      .threshold(LINE_THRESHOLD)
-      .png()
-      .toBuffer();
-
-    const cropResult = await cropToMainContent(thresholdedImageBuffer);
-    const processedImageBuffer = cropResult.buffer;
-
-    const processedMetadata = await sharp(processedImageBuffer).metadata();
-    const imageWidth = processedMetadata.width;
-    const imageHeight = processedMetadata.height;
-
-    if (!imageWidth || !imageHeight) {
-      return NextResponse.json({ message: "Kunde inte läsa bildens storlek." }, { status: 400 });
-    }
-
-    const beigeOverlay = Buffer.from(
-      `<svg width="${imageWidth}" height="${imageHeight}">
-        <rect width="100%" height="100%" fill="rgb(${BEIGE_BACKGROUND.r},${BEIGE_BACKGROUND.g},${BEIGE_BACKGROUND.b})" />
-      </svg>`,
-    );
-
-    const beigeTintedImageBuffer = await sharp(processedImageBuffer)
-      .composite([
-        {
-          input: beigeOverlay,
-          blend: "multiply",
-        },
-      ])
-      .png()
-      .toBuffer();
-
-    const logoFilePath = path.join(process.cwd(), "public", "sm-logo.svg");
-    const desiredLogoWidth = Math.min(LOGO_MAX_WIDTH_PX, Math.round(imageWidth * LOGO_WIDTH_RATIO));
-    const logoBuffer = await sharp(logoFilePath)
-      .resize({
-        width: desiredLogoWidth,
-        withoutEnlargement: true,
-      })
-      .png()
-      .toBuffer();
-    const logoMetadata = await sharp(logoBuffer).metadata();
-    const logoWidth = logoMetadata.width;
-    const logoHeight = logoMetadata.height;
-
-    if (!logoWidth || !logoHeight) {
-      return NextResponse.json({ message: "Kunde inte läsa loggans storlek." }, { status: 500 });
-    }
-
-    const contentWidth = Math.max(imageWidth, logoWidth);
-    const contentHeight = imageHeight + LOGO_GAP_PX + logoHeight;
-    const minCanvasWidth = contentWidth + CONTENT_PADDING_PX * 2;
-    const minCanvasHeight = contentHeight + CONTENT_PADDING_PX * 2;
-    const canvasScale = Math.ceil(
-      Math.max(minCanvasWidth / ASPECT_RATIO_WIDTH, minCanvasHeight / ASPECT_RATIO_HEIGHT),
-    );
-    const canvasWidth = canvasScale * ASPECT_RATIO_WIDTH;
-    const canvasHeight = canvasScale * ASPECT_RATIO_HEIGHT;
-
-    const imageX = Math.floor((canvasWidth - imageWidth) / 2);
-    const contentTop = Math.floor((canvasHeight - contentHeight) / 2);
-    const imageY = contentTop;
-    const logoX = Math.floor((canvasWidth - logoWidth) / 2);
-    const logoY = imageY + imageHeight + LOGO_GAP_PX;
-    const frameOverlay = Buffer.from(
-      `<svg width="${canvasWidth}" height="${canvasHeight}">
-        <rect
-          x="${OUTER_FRAME_INSET_PX + OUTER_FRAME_STROKE_PX / 2}"
-          y="${OUTER_FRAME_INSET_PX + OUTER_FRAME_STROKE_PX / 2}"
-          width="${canvasWidth - OUTER_FRAME_INSET_PX * 2 - OUTER_FRAME_STROKE_PX}"
-          height="${canvasHeight - OUTER_FRAME_INSET_PX * 2 - OUTER_FRAME_STROKE_PX}"
-          fill="none"
-          stroke="#000000"
-          stroke-width="${OUTER_FRAME_STROKE_PX}"
-        />
-      </svg>`,
-    );
-
-    const outputBuffer = await sharp({
-      create: {
-        width: canvasWidth,
-        height: canvasHeight,
-        channels: 4,
-        background: BEIGE_BACKGROUND,
-      },
-    })
-      .composite([
-        {
-          input: beigeTintedImageBuffer,
-          left: imageX,
-          top: imageY,
-        },
-        {
-          input: logoBuffer,
-          left: logoX,
-          top: logoY,
-        },
-        {
-          input: frameOverlay,
-          left: 0,
-          top: 0,
-        },
-      ])
-      .png()
-      .toBuffer();
-
-    const croppedOriginalBuffer = await sharp(orientedColorBuffer)
-      .extract({
-        left: cropResult.boundingBox.left,
-        top: cropResult.boundingBox.top,
-        width: cropResult.boundingBox.width,
-        height: cropResult.boundingBox.height,
-      })
-      .png()
-      .toBuffer();
-
-    const compareBeforeBuffer = await sharp({
-      create: {
-        width: canvasWidth,
-        height: canvasHeight,
-        channels: 4,
-        background: { r: 255, g: 255, b: 255, alpha: 1 },
-      },
-    })
-      .composite([
-        {
-          input: croppedOriginalBuffer,
-          left: imageX,
-          top: imageY,
-        },
-      ])
-      .png()
-      .toBuffer();
-
-    const supabase = createSupabaseServerClient();
-    const { sourceUploadId, sourceUploadError } = await resolveSourceUploadId(
-      supabase,
-      uploadedFile,
-      inputBuffer,
-      sourceImageIdValue,
-    );
-    if (!sourceUploadId || sourceUploadError) {
-      return NextResponse.json({ message: sourceUploadError ?? "Kunde inte spara källbild." }, { status: 400 });
-    }
-
-    const uniqueGeneratedName = `${Date.now()}-${crypto.randomUUID()}.png`;
-    const storagePath = `${GENERATED_PREFIX}${uniqueGeneratedName}`;
-
-    const { error: uploadError } = await supabase.storage.from(BUCKET_NAME).upload(storagePath, outputBuffer, {
-      upsert: false,
-      contentType: "image/png",
-    });
-
-    if (uploadError) {
-      console.error("Failed to store generated image", uploadError);
-      return NextResponse.json({ message: "Kunde inte spara den genererade bilden." }, { status: 500 });
-    }
-
-    const { data: insertedImage, error: insertError } = await supabase
-      .from(UPLOADS_TABLE)
-      .insert({
-        file_name: "planritning.png",
-        file_path: storagePath,
-        file_size: outputBuffer.byteLength,
-        mime_type: "image/png",
-        source_upload_id: sourceUploadId,
-      })
-      .select("id, file_path")
-      .single();
-
-    if (insertError || !insertedImage?.id) {
-      await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
-      console.error("Failed to store generated image metadata", insertError);
-      return NextResponse.json({ message: "Kunde inte spara bildens metadata." }, { status: 500 });
-    }
-
-    const generatedFileName = imageDownloadFileName(insertedImage.id, "png");
-    const { error: generatedRenameError } = await supabase
-      .from(UPLOADS_TABLE)
-      .update({ file_name: generatedFileName })
-      .eq("id", insertedImage.id);
-
-    if (generatedRenameError) {
-      await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
-      console.error("Failed to rename generated image metadata", generatedRenameError);
-      return NextResponse.json({ message: "Kunde inte spara bildens metadata." }, { status: 500 });
-    }
-
-    const generationEventError = await insertGenerationEvent(supabase);
-    if (generationEventError) {
-      // Keep conversion successful even if event logging fails.
-      console.error("Failed to store generation event", generationEventError);
-    }
-
-    const { data: signedImageData } = await supabase.storage.from(BUCKET_NAME).createSignedUrl(storagePath, 3600);
-    const savedImageUrl = signedImageData?.signedUrl ?? null;
-
-    const packedBody = packCompareResponse(
-      new Uint8Array(compareBeforeBuffer),
-      new Uint8Array(outputBuffer),
-    );
-
-    return new Response(packedBody, {
-      status: 200,
-      headers: {
-        "Content-Type": COMPARE_RESPONSE_CONTENT_TYPE,
-        "Cache-Control": "no-store",
-        ...(savedImageUrl ? { "X-Saved-Image-Url": savedImageUrl } : {}),
-        ...(insertedImage?.id ? { "X-Saved-Image-Id": String(insertedImage.id) } : {}),
-        "X-Source-Image-Id": String(sourceUploadId),
-        "X-Saved-Image-Path": storagePath,
-        "X-Layout-Canvas-Width": String(canvasWidth),
-        "X-Layout-Canvas-Height": String(canvasHeight),
-        "X-Layout-Image-X": String(imageX),
-        "X-Layout-Image-Y": String(imageY),
-        "X-Layout-Image-Width": String(imageWidth),
-        "X-Layout-Image-Height": String(imageHeight),
-        "X-Layout-Crop-Left": String(cropResult.boundingBox.left),
-        "X-Layout-Crop-Top": String(cropResult.boundingBox.top),
-        "X-Layout-Crop-Width": String(cropResult.boundingBox.width),
-        "X-Layout-Crop-Height": String(cropResult.boundingBox.height),
-        "X-Layout-Prepared-Width": String(cropResult.preparedWidth),
-        "X-Layout-Prepared-Height": String(cropResult.preparedHeight),
-        "X-Layout-Frame-Inset": String(OUTER_FRAME_INSET_PX),
-        "X-Layout-Frame-Stroke": String(OUTER_FRAME_STROKE_PX),
-      },
-    });
-  } catch (error) {
-    console.error("Image conversion failed", error);
-    return NextResponse.json({ message: "Kunde inte bearbeta bilden." }, { status: 500 });
+  if (!(uploadedFile instanceof File)) {
+    return NextResponse.json({ message: "Ingen bildfil skickades." }, { status: 400 });
   }
+
+  if (!uploadedFile.type.startsWith("image/")) {
+    return NextResponse.json({ message: "Filen måste vara en bild." }, { status: 400 });
+  }
+
+  const inputBuffer = Buffer.from(await uploadedFile.arrayBuffer());
+  const requestedEngine = resolveImageEngine();
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let isClosed = false;
+      const send = (event: ConvertStreamEvent) => {
+        if (isClosed) {
+          return;
+        }
+
+        try {
+          controller.enqueue(encoder.encode(encodeSseEvent(event)));
+        } catch {
+          // The client hung up; stop trying to write.
+          isClosed = true;
+        }
+      };
+
+      try {
+        send({ type: "status", message: "Förbereder uppladdad bild", engine: requestedEngine });
+
+        const orientedColorBuffer = await prepareSourceImage(inputBuffer);
+        const orientedMetadata = await sharp(orientedColorBuffer).metadata();
+        const sourceWidth = orientedMetadata.width;
+        const sourceHeight = orientedMetadata.height;
+
+        if (!sourceWidth || !sourceHeight) {
+          throw new ConvertFailure("Kunde inte läsa bildens storlek.");
+        }
+
+        let drawingBuffer = orientedColorBuffer;
+        // The image the "before" half of the comparison is cut from. It has to match the
+        // drawing pixel for pixel, because both use the same crop box.
+        let compareSourceBuffer = orientedColorBuffer;
+        let usedEngine: ConvertEngine = "algorithm";
+        // The AI paints the beige itself, so the canvas is padded with the colour it actually
+        // produced. Sampling it rather than hardcoding one avoids a visible seam where the
+        // drawing meets the padding.
+        let drawingBackground: Rgb | undefined;
+
+        if (requestedEngine === "ai") {
+          try {
+            send({
+              type: "status",
+              message: "AI ritar om planritningen efter stilreferenserna",
+              engine: "ai",
+            });
+
+            const generated = await generateFloorplanLineArt({
+              sourceImage: orientedColorBuffer,
+              sourceWidth,
+              sourceHeight,
+              signal: request.signal,
+            });
+
+            drawingBuffer = generated.buffer;
+            drawingBackground = await sampleDominantColor(generated.buffer);
+            // The drawing now comes back at the generated resolution, which is usually larger
+            // than the upload. Scale the original up to match so the crop box lands correctly.
+            compareSourceBuffer = await sharp(orientedColorBuffer)
+              .resize({ width: generated.width, height: generated.height, fit: "fill" })
+              .png()
+              .toBuffer();
+            usedEngine = "ai";
+
+            // Serialised into the message because Next's dev logger drops extra console args.
+            console.info(
+              `AI floor plan generated ${JSON.stringify({
+                model: generated.model,
+                generatedSize: generated.size,
+                deliveredSize: `${generated.width}x${generated.height}`,
+                sourceSize: `${sourceWidth}x${sourceHeight}`,
+                styleReferences: generated.styleReferenceCount,
+                background: drawingBackground,
+                usage: generated.usage,
+              })}`,
+            );
+          } catch (error) {
+            if (request.signal.aborted) {
+              throw error;
+            }
+
+            console.error("AI generation failed, falling back to the algorithm", error);
+            send({
+              type: "status",
+              message: "AI-steget misslyckades – slutför med standardalgoritmen",
+              engine: "algorithm",
+            });
+          }
+        }
+
+        send({ type: "status", message: "Sätter ram och logotyp", engine: usedEngine });
+
+        // Only the AI path produces house-styled line art; the algorithm still needs the
+        // threshold and the beige tint to turn a photo into brand output.
+        const branded = await composeBrandedFloorplan(drawingBuffer, {
+          preserveTones: usedEngine === "ai",
+          ...(usedEngine === "ai" && drawingBackground
+            ? { backgroundColor: drawingBackground }
+            : {}),
+        });
+        const compareBeforeBuffer = await buildCompareBefore(compareSourceBuffer, branded);
+
+        send({ type: "status", message: "Sparar planritning", engine: usedEngine });
+
+        const supabase = createSupabaseServerClient();
+        const { sourceUploadId, sourceUploadError } = await resolveSourceUploadId(
+          supabase,
+          uploadedFile,
+          inputBuffer,
+          sourceImageIdValue,
+        );
+
+        if (!sourceUploadId || sourceUploadError) {
+          throw new ConvertFailure(sourceUploadError ?? "Kunde inte spara källbild.");
+        }
+
+        const uniqueGeneratedName = `${Date.now()}-${crypto.randomUUID()}.png`;
+        const storagePath = `${GENERATED_PREFIX}${uniqueGeneratedName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from(BUCKET_NAME)
+          .upload(storagePath, branded.output, {
+            upsert: false,
+            contentType: "image/png",
+          });
+
+        if (uploadError) {
+          console.error("Failed to store generated image", uploadError);
+          throw new ConvertFailure("Kunde inte spara den genererade bilden.");
+        }
+
+        const { data: insertedImage, error: insertError } = await supabase
+          .from(UPLOADS_TABLE)
+          .insert({
+            file_name: "planritning.png",
+            file_path: storagePath,
+            file_size: branded.output.byteLength,
+            mime_type: "image/png",
+            source_upload_id: sourceUploadId,
+          })
+          .select("id, file_path")
+          .single();
+
+        if (insertError || !insertedImage?.id) {
+          await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
+          console.error("Failed to store generated image metadata", insertError);
+          throw new ConvertFailure("Kunde inte spara bildens metadata.");
+        }
+
+        const generatedFileName = imageDownloadFileName(insertedImage.id, "png");
+        const { error: generatedRenameError } = await supabase
+          .from(UPLOADS_TABLE)
+          .update({ file_name: generatedFileName })
+          .eq("id", insertedImage.id);
+
+        if (generatedRenameError) {
+          await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
+          console.error("Failed to rename generated image metadata", generatedRenameError);
+          throw new ConvertFailure("Kunde inte spara bildens metadata.");
+        }
+
+        const generationEventError = await insertGenerationEvent(supabase);
+        if (generationEventError) {
+          // Keep conversion successful even if event logging fails.
+          console.error("Failed to store generation event", generationEventError);
+        }
+
+        const { data: signedImageData } = await supabase.storage
+          .from(BUCKET_NAME)
+          .createSignedUrl(storagePath, 3600);
+        const savedImageUrl = signedImageData?.signedUrl ?? null;
+
+        send({
+          type: "done",
+          engine: usedEngine,
+          savedImageId: insertedImage.id,
+          savedImagePath: storagePath,
+          savedImageUrl,
+          sourceImageId: sourceUploadId,
+          compareBefore: toPngDataUrl(compareBeforeBuffer),
+          // Only pay the base64 cost when the client has no signed URL to load instead.
+          result: savedImageUrl ? "" : toPngDataUrl(branded.output),
+          layout: {
+            canvasWidth: branded.canvasWidth,
+            canvasHeight: branded.canvasHeight,
+            imageX: branded.imageX,
+            imageY: branded.imageY,
+            imageWidth: branded.imageWidth,
+            imageHeight: branded.imageHeight,
+            cropLeft: branded.crop.left,
+            cropTop: branded.crop.top,
+            cropWidth: branded.crop.width,
+            cropHeight: branded.crop.height,
+            preparedWidth: branded.preparedWidth,
+            preparedHeight: branded.preparedHeight,
+            outerFrameInset: branded.metrics.frameInset,
+            outerFrameStroke: branded.metrics.frameStroke,
+          },
+        });
+      } catch (error) {
+        console.error("Image conversion failed", error);
+        send({
+          type: "error",
+          message:
+            error instanceof ConvertFailure ? error.message : "Kunde inte bearbeta bilden.",
+        });
+      } finally {
+        isClosed = true;
+        try {
+          controller.close();
+        } catch {
+          // Already closed by a client disconnect.
+        }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": CONVERT_STREAM_CONTENT_TYPE,
+      "Cache-Control": "no-store, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

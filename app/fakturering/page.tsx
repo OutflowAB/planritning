@@ -1,6 +1,6 @@
 "use client";
 
-import Image from "next/image";
+import { ThumbnailImage } from "@/components/ui/thumbnail-image";
 import { Check, ChevronLeft, ChevronRight, Loader2, Minus, Plus, X } from "lucide-react";
 import { TouchEvent, WheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -502,14 +502,18 @@ export default function FaktureringPage() {
                     onTouchCancel={handlePreviewTouchEnd}
                     onWheel={handlePreviewWheel}
                   >
-                    <Image
-                      src={previewUrl}
-                      alt={imageDisplayName(previewLog.id)}
-                      width={2200}
-                      height={1600}
-                      className="h-auto max-h-[calc(90vh-120px)] w-auto max-w-full border border-[#d8d2c8] bg-white object-contain transition-transform duration-150"
+                    <div
+                      className="w-full transition-transform duration-150"
                       style={{ transform: `scale(${previewZoom})`, transformOrigin: "center center" }}
-                    />
+                    >
+                      <ThumbnailImage
+                        src={previewUrl}
+                        alt={imageDisplayName(previewLog.id)}
+                        heightClassName="h-[calc(90vh-120px)]"
+                        sizes="(max-width: 1024px) 95vw, 80vw"
+                        priority
+                      />
+                    </div>
                   </div>
                 )}
               </div>

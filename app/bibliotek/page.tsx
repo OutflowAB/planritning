@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import {
   ChevronDown,
   Download,
@@ -20,7 +19,9 @@ import {
   exportLibraryFloorplan,
   type LibraryExportFormat,
 } from "@/lib/floorplan/export-library";
+import { ThumbnailImage } from "@/components/ui/thumbnail-image";
 import { imageDisplayName, imageDownloadBaseName } from "@/lib/image-naming";
+import { resolvePreviewUrls, withFreshPreviewUrls } from "@/lib/image-preview-cache";
 import { supabase } from "@/lib/supabase";
 import { buildVerktygHref, setPendingVerktygSave } from "@/lib/verktyg-save-session";
 
@@ -28,7 +29,6 @@ const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
 const GENERATED_PREFIX = "generated/";
 const PREVIEW_CACHE_KEY = "library-preview-cache-v1";
-const PREVIEW_CACHE_TTL_MS = 55 * 60 * 1000;
 const LIBRARY_LIST_CACHE_KEY = "library-list-cache-v1";
 const LIBRARY_LIST_CACHE_TTL_MS = 15 * 60 * 1000;
 const GENERATION_EVENTS_EVENT = "generation_events";
@@ -53,55 +53,10 @@ type GeneratedImageRow = {
   preview_url?: string | null;
 };
 
-type PreviewCacheEntry = {
-  url: string;
-  expiresAt: number;
-};
-
 type LibraryListCachePayload = {
   rows: GeneratedImageRow[];
   expiresAt: number;
 };
-
-function readPreviewCache() {
-  if (typeof window === "undefined") {
-    return new Map<string, PreviewCacheEntry>();
-  }
-
-  const rawCache = window.localStorage.getItem(PREVIEW_CACHE_KEY);
-  if (!rawCache) {
-    return new Map<string, PreviewCacheEntry>();
-  }
-
-  try {
-    const parsed = JSON.parse(rawCache) as Record<string, PreviewCacheEntry>;
-    const now = Date.now();
-    const map = new Map<string, PreviewCacheEntry>();
-
-    Object.entries(parsed).forEach(([path, entry]) => {
-      if (entry?.url && typeof entry.expiresAt === "number" && entry.expiresAt > now) {
-        map.set(path, entry);
-      }
-    });
-
-    return map;
-  } catch {
-    return new Map<string, PreviewCacheEntry>();
-  }
-}
-
-function writePreviewCache(entries: Map<string, PreviewCacheEntry>) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const serialized: Record<string, PreviewCacheEntry> = {};
-  entries.forEach((entry, path) => {
-    serialized[path] = entry;
-  });
-
-  window.localStorage.setItem(PREVIEW_CACHE_KEY, JSON.stringify(serialized));
-}
 
 function readLibraryListCache() {
   if (typeof window === "undefined") {
@@ -148,10 +103,17 @@ export default function BibliotekPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const canDelete = pathname.startsWith("/admin") || getStoredRole() === "admin";
-  const [isLoading, setIsLoading] = useState(true);
+  // Seeded from the cache during the first render. Reading it in an effect instead would
+  // paint an empty skeleton for one frame on every revisit.
+  const [cachedRows] = useState(() => readLibraryListCache());
+  const [isLoading, setIsLoading] = useState(() => cachedRows === null);
+  // True while a cached list is on screen and a refresh is running behind it.
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [actionSuccess, setActionSuccess] = useState("");
-  const [images, setImages] = useState<GeneratedImageRow[]>([]);
+  const [images, setImages] = useState<GeneratedImageRow[]>(
+    () => cachedRows ?? [],
+  );
   const [selectedImageIds, setSelectedImageIds] = useState<number[]>([]);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [isPreviewDownloading, setIsPreviewDownloading] = useState(false);
@@ -159,6 +121,8 @@ export default function BibliotekPage() {
   const [downloadingFormat, setDownloadingFormat] = useState<LibraryExportFormat | null>(null);
   const [isDeletingSelected, setIsDeletingSelected] = useState(false);
   const [isSendingToVerktyg, setIsSendingToVerktyg] = useState(false);
+  // Which card triggered the edit, so only that button shows a spinner.
+  const [editingImageId, setEditingImageId] = useState<number | null>(null);
   const downloadMenuRef = useRef<HTMLDivElement | null>(null);
   const pinchStartDistanceRef = useRef<number | null>(null);
   const pinchStartZoomRef = useRef<number>(1);
@@ -315,11 +279,12 @@ export default function BibliotekPage() {
     }
   }
 
-  async function sendBackToVerktyg() {
-    if (!previewImage || isSendingToVerktyg) {
+  async function sendBackToVerktyg(image: GeneratedImageRow | undefined) {
+    if (!image || isSendingToVerktyg) {
       return;
     }
 
+    setEditingImageId(image.id);
     setIsSendingToVerktyg(true);
     setLoadError("");
 
@@ -330,32 +295,33 @@ export default function BibliotekPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          imageId: previewImage.id,
-          filePath: previewImage.file_path,
+          imageId: image.id,
+          filePath: image.file_path,
         }),
       });
       const data = (await response.json()) as { message?: string };
 
       if (!response.ok) {
-        throw new Error(data.message ?? "Kunde inte skicka tillbaka till verktyg.");
+        throw new Error(data.message ?? "Kunde inte öppna bilden i verktyg.");
       }
 
       setPendingVerktygSave({
-        imageId: previewImage.id,
-        imagePath: previewImage.file_path,
+        imageId: image.id,
+        imagePath: image.file_path,
       });
       window.dispatchEvent(new Event("library-updated"));
       router.push(
         buildVerktygHref(pathname, {
-          imageId: previewImage.id,
-          imagePath: previewImage.file_path,
+          imageId: image.id,
+          imagePath: image.file_path,
         }),
       );
     } catch (error) {
       setLoadError(
-        error instanceof Error ? error.message : "Kunde inte skicka tillbaka till verktyg.",
+        error instanceof Error ? error.message : "Kunde inte öppna bilden i verktyg.",
       );
       setIsSendingToVerktyg(false);
+      setEditingImageId(null);
     }
   }
 
@@ -442,16 +408,18 @@ export default function BibliotekPage() {
 
   async function loadLibrary(forceRefresh = false) {
     setLoadError("");
-    if (!forceRefresh) {
-      const cachedRows = readLibraryListCache();
-      if (cachedRows) {
-        setImages(cachedRows);
-        setIsLoading(false);
-        return;
-      }
-    }
 
-    setIsLoading(true);
+    const restoredRows = forceRefresh ? null : readLibraryListCache();
+    if (restoredRows) {
+      // Show the cached list straight away, then revalidate below. Without the revalidation
+      // images deleted elsewhere linger here until the cache expires, and their thumbnails
+      // keep rendering from the browser cache even after the rows and files are gone.
+      setImages(withFreshPreviewUrls(restoredRows, PREVIEW_CACHE_KEY));
+      setIsLoading(false);
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
+    }
 
     const { data, error: queryError } = await supabase
       .from(UPLOADS_TABLE)
@@ -463,6 +431,7 @@ export default function BibliotekPage() {
     if (queryError) {
       setLoadError(`Kunde inte hämta biblioteket: ${queryError.message}`);
       setIsLoading(false);
+      setIsRefreshing(false);
       return;
     }
 
@@ -471,49 +440,13 @@ export default function BibliotekPage() {
       .filter((row) => row.mime_type?.startsWith("image/"))
       .map((row) => row.file_path);
 
-    const previewByPath = new Map<string, string>();
-    const previewCache = readPreviewCache();
-    const pathsToSign: string[] = [];
-
-    imagePaths.forEach((path) => {
-      if (!forceRefresh) {
-        const cached = previewCache.get(path);
-        if (cached) {
-          previewByPath.set(path, cached.url);
-          return;
-        }
-      }
-
-      pathsToSign.push(path);
-    });
-
-    if (pathsToSign.length > 0) {
-      const { data: signedData } = await supabase.storage
-        .from(BUCKET_NAME)
-        .createSignedUrls(pathsToSign, 3600);
-
-      signedData?.forEach((item, index) => {
-        if (item?.signedUrl) {
-          const path = pathsToSign[index];
-          const expiresAt = Date.now() + PREVIEW_CACHE_TTL_MS;
-
-          previewByPath.set(path, item.signedUrl);
-          previewCache.set(path, {
-            url: item.signedUrl,
-            expiresAt,
-          });
-        }
-      });
-    }
-
-    const validPaths = new Set(imagePaths);
-    Array.from(previewCache.keys()).forEach((path) => {
-      const entry = previewCache.get(path);
-      if (!validPaths.has(path) || !entry || entry.expiresAt <= Date.now()) {
-        previewCache.delete(path);
-      }
-    });
-    writePreviewCache(previewCache);
+    const previewByPath = await resolvePreviewUrls(
+      supabase,
+      BUCKET_NAME,
+      imagePaths,
+      PREVIEW_CACHE_KEY,
+      { forceRefresh },
+    );
 
     const rowsWithPreview = rows.map((row) => ({
       ...row,
@@ -526,6 +459,7 @@ export default function BibliotekPage() {
     );
     writeLibraryListCache(rowsWithPreview);
     setIsLoading(false);
+    setIsRefreshing(false);
   }
 
   useEffect(() => {
@@ -650,6 +584,17 @@ export default function BibliotekPage() {
           </div>
         ) : null}
 
+        {isRefreshing ? (
+          <p
+            className="mt-4 inline-flex items-center gap-1.5 text-xs text-[#7b746a]"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+            Uppdaterar listan...
+          </p>
+        ) : null}
+
         {loadError ? (
           <p className="mt-6 rounded-none border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {loadError}
@@ -669,7 +614,7 @@ export default function BibliotekPage() {
 
         {!isLoading && !loadError && images.length > 0 ? (
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
-            {images.map((image) => {
+            {images.map((image, imageIndex) => {
               const isMarked = selectedImageIds.includes(image.id);
 
               return (
@@ -702,26 +647,42 @@ export default function BibliotekPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-center bg-[#f0ece6] p-4">
-                  {image.preview_url ? (
-                    <button
-                      type="button"
-                      onClick={() => openImagePreview(image.id)}
-                      className="cursor-zoom-in"
-                    >
-                      <Image
-                        src={image.preview_url}
-                        alt={imageDisplayName(image.id)}
-                        width={1200}
-                        height={900}
-                        className="max-h-[220px] w-auto max-w-full rounded-none border border-[#d8d2c8] bg-white object-contain"
-                      />
-                    </button>
-                  ) : (
-                    <div className="flex h-52 w-full items-center justify-center rounded-none border border-[#d8d2c8] bg-[#f7f4ef] text-sm text-[#7b746a]">
-                      Ingen bildförhandsvisning
-                    </div>
-                  )}
+                <div className="bg-[#f0ece6] p-4">
+                  <button
+                    type="button"
+                    onClick={() => openImagePreview(image.id)}
+                    disabled={!image.preview_url}
+                    className="block w-full cursor-zoom-in disabled:cursor-default"
+                  >
+                    <ThumbnailImage
+                      src={image.preview_url}
+                      alt={imageDisplayName(image.id)}
+                      heightClassName="h-[220px]"
+                      sizes={"(max-width: 768px) 90vw, (max-width: 1280px) 45vw, 30vw"}
+                      priority={imageIndex < 3}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-center border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+                  <button
+                    type="button"
+                    onClick={() => void sendBackToVerktyg(image)}
+                    disabled={isSendingToVerktyg}
+                    className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-3 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {editingImageId === image.id ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                        Öppnar...
+                      </>
+                    ) : (
+                      <>
+                        <Pencil size={13} aria-hidden="true" />
+                        Redigera
+                      </>
+                    )}
+                  </button>
                 </div>
               </article>
               );
@@ -842,14 +803,18 @@ export default function BibliotekPage() {
                   onTouchCancel={handlePreviewTouchEnd}
                   onWheel={handlePreviewWheel}
                 >
-                  <Image
-                    src={previewImage.preview_url}
-                    alt={imageDisplayName(previewImage.id)}
-                    width={2200}
-                    height={1600}
-                    className="h-auto max-h-[calc(90vh-190px)] w-auto max-w-full border border-[#d8d2c8] bg-white object-contain transition-transform duration-150"
+                  <div
+                    className="w-full transition-transform duration-150"
                     style={{ transform: `scale(${previewZoom})`, transformOrigin: "center center" }}
-                  />
+                  >
+                    <ThumbnailImage
+                      src={previewImage.preview_url}
+                      alt={imageDisplayName(previewImage.id)}
+                      heightClassName="h-[calc(90vh-190px)]"
+                      sizes="(max-width: 1024px) 95vw, 80vw"
+                      priority
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -857,7 +822,7 @@ export default function BibliotekPage() {
             <div className="flex items-center border-t border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
               <button
                 type="button"
-                onClick={() => void sendBackToVerktyg()}
+                onClick={() => void sendBackToVerktyg(previewImage)}
                 disabled={isSendingToVerktyg}
                 className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-3 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
               >

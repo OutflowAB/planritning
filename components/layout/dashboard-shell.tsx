@@ -9,13 +9,11 @@ import {
   BuildingOffice2Icon,
   CreditCardIcon,
   Squares2X2Icon,
-  WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
 import { usePathname, useRouter } from "next/navigation";
 import { ComponentType, ReactNode, SVGProps, useCallback, useEffect, useMemo, useState } from "react";
 
 import { setAuthenticated } from "@/lib/auth";
-import { buildVerktygHref, getPendingVerktygSave, VERKTYG_SAVE_PENDING_EVENT } from "@/lib/verktyg-save-session";
 import { supabase } from "@/lib/supabase";
 
 type DashboardShellProps = {
@@ -27,14 +25,12 @@ type SidebarIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
 const defaultSidebarItems = [
   { label: "Startsida", href: "/startsida", icon: Squares2X2Icon },
-  { label: "Verktyg", href: "/verktyg", icon: WrenchScrewdriverIcon },
   { label: "Planritningar", href: "/planritningar", icon: BuildingOffice2Icon },
   { label: "Uppladdningar", href: "/uppladdningar", icon: ArrowUpTrayIcon },
 ] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
 
 const adminSidebarItems = [
   { label: "Dashboard", href: "/admin/dashboard", icon: Squares2X2Icon },
-  { label: "Verktyg", href: "/admin/verktyg", icon: WrenchScrewdriverIcon },
   { label: "Planritningar", href: "/admin/planritningar", icon: BuildingOffice2Icon },
   { label: "Uppladdningar", href: "/admin/uppladdningar", icon: ArrowUpTrayIcon },
 ] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
@@ -56,13 +52,55 @@ const UPLOADS_TABLE = "uploaded_images";
 const GENERATED_UPLOADS_PREFIX = "generated/";
 const GENERATION_EVENTS_EVENT = "generation_events";
 const LEGACY_GENERATION_EVENT = "generation-updated";
+const GENERATION_COUNT_CACHE_KEY = "generation-count-cache-v1";
+
+/**
+ * Each section has its own layout, so the shell remounts on every navigation. Starting the
+ * counter at zero made the sidebar flash "0" and then jump to the real figure every single
+ * time. Caching the last known count per month keeps the number stable across navigations
+ * while it revalidates behind the scenes.
+ */
+function readCachedGenerationCount(monthKey: string): number | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(GENERATION_COUNT_CACHE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as { monthKey?: string; count?: number };
+    return parsed.monthKey === monthKey && typeof parsed.count === "number"
+      ? parsed.count
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedGenerationCount(monthKey: string, count: number) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.sessionStorage.setItem(
+    GENERATION_COUNT_CACHE_KEY,
+    JSON.stringify({ monthKey, count }),
+  );
+}
+
+function currentMonthKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${now.getMonth()}`;
+}
 
 export function DashboardShell({ children, variant = "default" }: DashboardShellProps) {
   const router = useRouter();
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [imageGenerationCount, setImageGenerationCount] = useState(0);
-  const [verktygSessionVersion, setVerktygSessionVersion] = useState(0);
+  const [imageGenerationCount, setImageGenerationCount] = useState<number | null>(null);
   const currentMonthLabel = useMemo(
     () =>
       new Date().toLocaleDateString("sv-SE", {
@@ -72,19 +110,10 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
     [],
   );
 
-  const imageGenerationTotalCost = imageGenerationCount * IMAGE_GENERATION_COST_SEK;
+  const imageGenerationTotalCost = (imageGenerationCount ?? 0) * IMAGE_GENERATION_COST_SEK;
   const sidebarItems = variant === "admin" ? adminSidebarItems : defaultSidebarItems;
   const activeBillingItem = variant === "admin" ? adminBillingItem : billingItem;
   const mobileNavItems = [...sidebarItems, activeBillingItem] as const;
-  const verktygHref = useMemo(() => {
-    const pendingSave = getPendingVerktygSave();
-    if (pendingSave) {
-      return buildVerktygHref(pathname, pendingSave);
-    }
-
-    return variant === "admin" ? "/admin/verktyg" : "/verktyg";
-  }, [pathname, variant, verktygSessionVersion]);
-
   const loadGenerationStats = useCallback(async () => {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
@@ -106,23 +135,18 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
     }
 
     setImageGenerationCount(count ?? 0);
-  }, []);
-
-  useEffect(() => {
-    function syncVerktygSession() {
-      setVerktygSessionVersion((version) => version + 1);
-    }
-
-    syncVerktygSession();
-    window.addEventListener(VERKTYG_SAVE_PENDING_EVENT, syncVerktygSession);
-
-    return () => {
-      window.removeEventListener(VERKTYG_SAVE_PENDING_EVENT, syncVerktygSession);
-    };
+    writeCachedGenerationCount(currentMonthKey(), count ?? 0);
   }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      // Paint the last known figure first so the sidebar does not flash a placeholder on
+      // every navigation, then let the query overwrite it.
+      const cached = readCachedGenerationCount(currentMonthKey());
+      if (cached !== null) {
+        setImageGenerationCount((previous) => previous ?? cached);
+      }
+
       void loadGenerationStats();
     }, 0);
 
@@ -151,19 +175,11 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
     router.replace("/login");
   }
 
-  function resolveNavHref(href: string) {
-    if (href === "/verktyg" || href === "/admin/verktyg") {
-      return verktygHref;
-    }
-
-    return href;
-  }
-
   function isActivePath(href: string) {
     const exactMatchPaths =
       variant === "admin"
-        ? ["/admin/dashboard", "/admin/verktyg"]
-        : ["/startsida", "/verktyg"];
+        ? ["/admin/dashboard"]
+        : ["/startsida"];
 
     if (exactMatchPaths.includes(href)) {
       return pathname === href;
@@ -225,7 +241,7 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
             {sidebarItems.map((item) => (
               <Link
                 key={item.href}
-                href={resolveNavHref(item.href)}
+                href={item.href}
                 className={`inline-flex w-full items-center gap-2 rounded-none px-3 py-4 text-left text-sm font-medium transition ${
                   isActivePath(item.href)
                     ? "bg-white/20 text-white"
@@ -256,7 +272,7 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
               <p className="mt-3 text-sm text-white/80">
                 Bildgenereringar:{" "}
                 <span className="font-semibold text-white/95">
-                  {imageGenerationCount}
+                  {imageGenerationCount ?? "–"}
                 </span>
               </p>
               <p className="mt-1 text-sm text-white/80">
@@ -275,7 +291,7 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
               Krediter ({currentMonthLabel})
             </h3>
             <p className="mt-2 text-sm">
-              Bildgenereringar: <span className="font-semibold">{imageGenerationCount}</span>
+              Bildgenereringar: <span className="font-semibold">{imageGenerationCount ?? "–"}</span>
             </p>
             <p className="text-sm">
               Kostnad: <span className="font-semibold">{imageGenerationTotalCost} kr</span>
@@ -300,7 +316,7 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
             return (
               <Link
                 key={item.href}
-                href={resolveNavHref(item.href)}
+                href={item.href}
                 className={`inline-flex min-w-[88px] flex-1 flex-col items-center justify-center gap-1 rounded-sm px-3 py-2 text-[11px] font-medium transition ${
                   isActive ? "bg-white/20 text-white" : "text-white/80 hover:bg-white/10 hover:text-white"
                 }`}

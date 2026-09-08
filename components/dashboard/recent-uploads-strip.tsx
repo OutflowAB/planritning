@@ -1,16 +1,19 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { supabase } from "@/lib/supabase";
 import { imageDisplayName } from "@/lib/image-naming";
+import { ThumbnailImage } from "@/components/ui/thumbnail-image";
+import { resolvePreviewUrls } from "@/lib/image-preview-cache";
 
 const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
 const UPLOADS_PREFIX = "uploads/";
+/** Shared with the uploads page, so a preview signed there is reused here and vice versa. */
+const PREVIEW_CACHE_KEY = "upload-preview-cache-v1";
 
 type UploadRow = {
   id: number;
@@ -53,19 +56,10 @@ export function RecentUploadsStrip() {
         .filter((row) => row.mime_type?.startsWith("image/"))
         .map((row) => row.file_path);
 
-      const previewByPath = new Map<string, string>();
-      if (imagePaths.length > 0) {
-        const { data: signedData } = await supabase.storage
-          .from(BUCKET_NAME)
-          .createSignedUrls(imagePaths, 3600);
-
-        signedData?.forEach((item, index) => {
-          const path = imagePaths[index];
-          if (item?.signedUrl && path) {
-            previewByPath.set(path, item.signedUrl);
-          }
-        });
-      }
+      const previewByPath =
+        imagePaths.length > 0
+          ? await resolvePreviewUrls(supabase, BUCKET_NAME, imagePaths, PREVIEW_CACHE_KEY)
+          : new Map<string, string>();
 
       if (cancelled) {
         return;
@@ -115,20 +109,16 @@ export function RecentUploadsStrip() {
               href={`/uppladdningar?previewImageId=${upload.id}`}
               className="group flex flex-col overflow-hidden rounded-sm border border-slate-300 bg-white text-left shadow-sm transition hover:border-slate-400 hover:shadow-md"
             >
-              <div className="flex items-center justify-center bg-slate-100 p-3">
-                {upload.preview_url ? (
-                  <Image
-                    src={upload.preview_url}
-                    alt={imageDisplayName(upload.id)}
-                    width={640}
-                    height={480}
-                    className="max-h-[160px] w-auto max-w-full object-contain"
-                  />
-                ) : (
-                  <div className="flex h-36 w-full items-center justify-center text-sm text-slate-500">
-                    Ingen förhandsvisning
-                  </div>
-                )}
+              <div className="bg-slate-100 p-3">
+                <ThumbnailImage
+                  src={upload.preview_url}
+                  alt={imageDisplayName(upload.id)}
+                  heightClassName="h-[160px]"
+                  sizes="(max-width: 640px) 90vw, 320px"
+                  priority
+                  emptyLabel="Ingen förhandsvisning"
+                  frameClassName="bg-white"
+                />
               </div>
               <div className="border-t border-slate-200 px-3 py-2.5">
                 <p className="truncate text-sm font-medium text-slate-800 group-hover:text-slate-900">

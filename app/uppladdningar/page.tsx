@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { Download, Loader2, Minus, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ChangeEvent, DragEvent, TouchEvent, WheelEvent, useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -10,6 +9,8 @@ import {
   imageDisplayName,
   resolveImageDownloadFileName,
 } from "@/lib/image-naming";
+import { ThumbnailImage } from "@/components/ui/thumbnail-image";
+import { resolvePreviewUrls, withFreshPreviewUrls } from "@/lib/image-preview-cache";
 import {
   hasUnfinishedConverterSession,
   subscribeUnfinishedConverterSession,
@@ -21,7 +22,6 @@ const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
 const UPLOADS_PREFIX = "uploads/";
 const PREVIEW_CACHE_KEY = "upload-preview-cache-v1";
-const PREVIEW_CACHE_TTL_MS = 55 * 60 * 1000;
 const UPLOADS_LIST_CACHE_KEY = "uploads-list-cache-v1";
 const UPLOADS_LIST_CACHE_TTL_MS = 15 * 60 * 1000;
 const CONVERTER_TRANSFER_KEY = "converter-selected-upload-v1";
@@ -41,11 +41,6 @@ type UploadedImageRow = {
   preview_url?: string | null;
 };
 
-type PreviewCacheEntry = {
-  url: string;
-  expiresAt: number;
-};
-
 type UploadsListCachePayload = {
   rows: UploadedImageRow[];
   expiresAt: number;
@@ -56,46 +51,6 @@ type ConverterTransferPayload = {
   fileName: string;
   uploadId: number;
 };
-
-function readPreviewCache() {
-  if (typeof window === "undefined") {
-    return new Map<string, PreviewCacheEntry>();
-  }
-
-  const rawCache = window.localStorage.getItem(PREVIEW_CACHE_KEY);
-  if (!rawCache) {
-    return new Map<string, PreviewCacheEntry>();
-  }
-
-  try {
-    const parsed = JSON.parse(rawCache) as Record<string, PreviewCacheEntry>;
-    const now = Date.now();
-    const map = new Map<string, PreviewCacheEntry>();
-
-    Object.entries(parsed).forEach(([path, entry]) => {
-      if (entry?.url && typeof entry.expiresAt === "number" && entry.expiresAt > now) {
-        map.set(path, entry);
-      }
-    });
-
-    return map;
-  } catch {
-    return new Map<string, PreviewCacheEntry>();
-  }
-}
-
-function writePreviewCache(entries: Map<string, PreviewCacheEntry>) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const serialized: Record<string, PreviewCacheEntry> = {};
-  entries.forEach((entry, path) => {
-    serialized[path] = entry;
-  });
-
-  window.localStorage.setItem(PREVIEW_CACHE_KEY, JSON.stringify(serialized));
-}
 
 function readUploadsListCache() {
   if (typeof window === "undefined") {
@@ -156,9 +111,14 @@ export default function UppladdningarPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [isLoadingUploads, setIsLoadingUploads] = useState(true);
+  // Seeded from the cache during the first render. Reading it in an effect instead would
+  // paint an empty skeleton for one frame on every revisit.
+  const [cachedUploadRows] = useState(() => readUploadsListCache());
+  const [isLoadingUploads, setIsLoadingUploads] = useState(() => cachedUploadRows === null);
+  // True while a cached list is on screen and a refresh is running behind it.
+  const [isRefreshingUploads, setIsRefreshingUploads] = useState(false);
   const [uploadsLoadFailed, setUploadsLoadFailed] = useState(false);
-  const [uploads, setUploads] = useState<UploadedImageRow[]>([]);
+  const [uploads, setUploads] = useState<UploadedImageRow[]>(() => cachedUploadRows ?? []);
   const [selectedUploadIds, setSelectedUploadIds] = useState<number[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [loadedPreviewIds, setLoadedPreviewIds] = useState<Record<number, boolean>>({});
@@ -413,16 +373,17 @@ export default function UppladdningarPage() {
 
   async function loadUploads(forceRefresh = false) {
     setUploadsLoadFailed(false);
-    if (!forceRefresh) {
-      const cachedRows = readUploadsListCache();
-      if (cachedRows) {
-        setUploads(cachedRows);
-        setIsLoadingUploads(false);
-        return;
-      }
-    }
 
-    setIsLoadingUploads(true);
+    const restoredRows = forceRefresh ? null : readUploadsListCache();
+    if (restoredRows) {
+      // Paint the cached list immediately, then revalidate below. Returning here instead would
+      // leave rows deleted elsewhere on screen until the cache expires.
+      setUploads(withFreshPreviewUrls(restoredRows, PREVIEW_CACHE_KEY));
+      setIsLoadingUploads(false);
+      setIsRefreshingUploads(true);
+    } else {
+      setIsLoadingUploads(true);
+    }
 
     const { data, error: queryError } = await supabase
       .from(UPLOADS_TABLE)
@@ -434,6 +395,7 @@ export default function UppladdningarPage() {
       setUploadsLoadFailed(true);
       showToast(`Kunde inte hämta uppladdningar: ${queryError.message}`, "error");
       setIsLoadingUploads(false);
+      setIsRefreshingUploads(false);
       return;
     }
 
@@ -442,47 +404,13 @@ export default function UppladdningarPage() {
       .filter((row) => row.mime_type?.startsWith("image/"))
       .map((row) => row.file_path);
 
-    const previewByPath = new Map<string, string>();
-    const previewCache = readPreviewCache();
-    const pathsToSign: string[] = [];
-
-    imagePaths.forEach((path) => {
-      const cached = previewCache.get(path);
-      if (cached) {
-        previewByPath.set(path, cached.url);
-      } else {
-        pathsToSign.push(path);
-      }
-    });
-
-    if (pathsToSign.length > 0) {
-      const { data: signedData } = await supabase.storage
-        .from(BUCKET_NAME)
-        .createSignedUrls(pathsToSign, 3600);
-
-      signedData?.forEach((item, index) => {
-        if (item?.signedUrl) {
-          const path = pathsToSign[index];
-          const expiresAt = Date.now() + PREVIEW_CACHE_TTL_MS;
-
-          previewByPath.set(path, item.signedUrl);
-          previewCache.set(path, {
-            url: item.signedUrl,
-            expiresAt,
-          });
-        }
-      });
-    }
-
-    // Keep cache tidy and relevant for current upload set.
-    const validPaths = new Set(imagePaths);
-    Array.from(previewCache.keys()).forEach((path) => {
-      const entry = previewCache.get(path);
-      if (!validPaths.has(path) || !entry || entry.expiresAt <= Date.now()) {
-        previewCache.delete(path);
-      }
-    });
-    writePreviewCache(previewCache);
+    const previewByPath = await resolvePreviewUrls(
+      supabase,
+      BUCKET_NAME,
+      imagePaths,
+      PREVIEW_CACHE_KEY,
+      { forceRefresh },
+    );
 
     const rowsWithPreview = rows.map((row) => ({
       ...row,
@@ -495,6 +423,7 @@ export default function UppladdningarPage() {
     );
     writeUploadsListCache(rowsWithPreview);
     setIsLoadingUploads(false);
+    setIsRefreshingUploads(false);
   }
 
   useEffect(() => {
@@ -735,13 +664,24 @@ export default function UppladdningarPage() {
               </div>
             ) : null}
 
+            {isRefreshingUploads ? (
+              <p
+                className="mb-3 inline-flex items-center gap-1.5 text-xs text-[#7b746a]"
+                role="status"
+                aria-live="polite"
+              >
+                <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                Uppdaterar listan...
+              </p>
+            ) : null}
+
             {!isLoadingUploads && !uploadsLoadFailed && uploads.length === 0 ? (
               <p className="mt-3 text-sm text-[#6a6258]">Inga uppladdningar finns ännu.</p>
             ) : null}
 
             {!isLoadingUploads && uploads.length > 0 ? (
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              {uploads.map((upload) => {
+              {uploads.map((upload, uploadIndex) => {
                 const isPreviewReady = !upload.preview_url || loadedPreviewIds[upload.id];
                 const isMarked = selectedUploadIds.includes(upload.id);
 
@@ -781,37 +721,34 @@ export default function UppladdningarPage() {
                   </div>
 
                   <div className="flex items-center justify-center bg-[#f0ece6] p-4">
-                    {upload.preview_url ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (isSelectionMode && canDelete) {
-                            toggleUploadSelection(upload.id);
-                            return;
-                          }
-                          openImagePreview(upload.id);
-                        }}
-                        className={isSelectionMode && canDelete ? "cursor-pointer" : "cursor-zoom-in"}
-                      >
-                        <Image
-                          src={upload.preview_url}
-                          alt={imageDisplayName(upload.id)}
-                          width={1200}
-                          height={900}
-                          onLoad={() =>
-                            setLoadedPreviewIds((previous) => ({
-                              ...previous,
-                              [upload.id]: true,
-                            }))
-                          }
-                          className="max-h-[220px] w-auto max-w-full rounded-none border border-[#d8d2c8] bg-white object-contain"
-                        />
-                      </button>
-                    ) : (
-                      <div className="flex h-52 w-full items-center justify-center rounded-none border border-[#d8d2c8] bg-[#f7f4ef] text-sm text-[#7b746a]">
-                        Ingen bildförhandsvisning
-                      </div>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isSelectionMode && canDelete) {
+                          toggleUploadSelection(upload.id);
+                          return;
+                        }
+                        openImagePreview(upload.id);
+                      }}
+                      disabled={!upload.preview_url}
+                      className={`block w-full disabled:cursor-default ${
+                        isSelectionMode && canDelete ? "cursor-pointer" : "cursor-zoom-in"
+                      }`}
+                    >
+                      <ThumbnailImage
+                        src={upload.preview_url}
+                        alt={imageDisplayName(upload.id)}
+                        heightClassName="h-[220px]"
+                        sizes={"(max-width: 768px) 90vw, (max-width: 1280px) 45vw, 30vw"}
+                        priority={uploadIndex < 3}
+                        onLoad={() =>
+                          setLoadedPreviewIds((previous) => ({
+                            ...previous,
+                            [upload.id]: true,
+                          }))
+                        }
+                      />
+                    </button>
                   </div>
                 </article>
                 );
@@ -899,14 +836,18 @@ export default function UppladdningarPage() {
                   onTouchCancel={handlePreviewTouchEnd}
                   onWheel={handlePreviewWheel}
                 >
-                  <Image
-                    src={previewImage.preview_url}
-                    alt={imageDisplayName(previewImage.id)}
-                    width={2200}
-                    height={1600}
-                    className="h-auto max-h-[calc(90vh-250px)] w-auto max-w-full border border-[#d8d2c8] bg-white object-contain transition-transform duration-150"
+                  <div
+                    className="w-full transition-transform duration-150"
                     style={{ transform: `scale(${previewZoom})`, transformOrigin: "center center" }}
-                  />
+                  >
+                    <ThumbnailImage
+                      src={previewImage.preview_url}
+                      alt={imageDisplayName(previewImage.id)}
+                      heightClassName="h-[calc(90vh-250px)]"
+                      sizes="(max-width: 1024px) 95vw, 80vw"
+                      priority
+                    />
+                  </div>
                 </div>
               </div>
             </div>

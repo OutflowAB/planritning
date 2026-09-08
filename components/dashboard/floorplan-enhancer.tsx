@@ -28,7 +28,7 @@ import {
   WatermarkOverlay,
 } from "@/components/dashboard/watermark-overlay";
 import { useToast } from "@/components/ui/toast-provider";
-import { unpackCompareResponse } from "@/lib/floorplan-compare-layout";
+import { readConvertStream } from "@/lib/floorplan/convert-stream";
 import {
   imageDisplayName,
   resolveImageDownloadFileName,
@@ -66,7 +66,10 @@ const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
-const PROCESSING_MIN_DURATION_MS = 20_000;
+const PROCESSING_MAX_PROGRESS_PERCENT = 96;
+/** Purely cosmetic cadence for the placeholder step list. It gates nothing. */
+const PROCESSING_STEP_INTERVAL_MS = 2_500;
+const PROCESSING_PROGRESS_TIME_CONSTANT_MS = 35_000;
 const PROCESSING_TERMINAL_DURATION_MS = 15_000;
 const PROCESSING_AI_ENHANCE_DURATION_MS = 5_000;
 const PROCESSING_STEPS = [
@@ -236,20 +239,9 @@ type ConverterTransferPayload = {
   uploadId?: number;
 };
 
-function waitForMinimumProcessingDuration(startedAt: number) {
-  const elapsed = Date.now() - startedAt;
-  const remaining = Math.max(0, PROCESSING_MIN_DURATION_MS - elapsed);
-  if (remaining === 0) {
-    return Promise.resolve();
-  }
-
-  return new Promise<void>((resolve) => {
-    window.setTimeout(resolve, remaining);
-  });
-}
-
 type ProcessingViewProps = {
   stepIndex: number;
+  statusMessage?: string | null;
 };
 
 function ProcessingAiEnhancingSteps({ stepIndex }: { stepIndex: number }) {
@@ -283,7 +275,7 @@ function ProcessingAiEnhancingSteps({ stepIndex }: { stepIndex: number }) {
   );
 }
 
-function ProcessingView({ stepIndex }: ProcessingViewProps) {
+function ProcessingView({ stepIndex, statusMessage }: ProcessingViewProps) {
   const [elapsedMs, setElapsedMs] = useState(0);
   const isAiPhase = elapsedMs >= PROCESSING_TERMINAL_DURATION_MS;
   const aiStepDuration = PROCESSING_AI_ENHANCE_DURATION_MS / AI_ENHANCING_STEPS.length;
@@ -293,8 +285,9 @@ function ProcessingView({ stepIndex }: ProcessingViewProps) {
         Math.floor((elapsedMs - PROCESSING_TERMINAL_DURATION_MS) / aiStepDuration),
       )
     : 0;
+  // Generation takes anywhere from 30s to 2 minutes, so ease towards — but never reach — 100%.
   const progressPercent = Math.round(
-    (Math.min(elapsedMs, PROCESSING_MIN_DURATION_MS) / PROCESSING_MIN_DURATION_MS) * 100,
+    PROCESSING_MAX_PROGRESS_PERCENT * (1 - Math.exp(-elapsedMs / PROCESSING_PROGRESS_TIME_CONSTANT_MS)),
   );
 
   useEffect(() => {
@@ -322,9 +315,11 @@ function ProcessingView({ stepIndex }: ProcessingViewProps) {
             {isAiPhase ? "AI-förbättrar planritning" : "Bearbetar planritning"}
           </p>
           <p className="text-sm text-[#7b746a]">
-            {isAiPhase
-              ? `${AI_ENHANCING_STEPS[aiStepIndex]}...`
-              : `${PROCESSING_STEPS[stepIndex]}...`}
+            {statusMessage
+              ? `${statusMessage}...`
+              : isAiPhase
+                ? `${AI_ENHANCING_STEPS[aiStepIndex]}...`
+                : `${PROCESSING_STEPS[stepIndex]}...`}
           </p>
         </div>
 
@@ -715,30 +710,6 @@ function ComparePreviewSkeleton({ showWatermark = false }: { showWatermark?: boo
   );
 }
 
-function extractStoragePathFromSignedUrl(signedUrl: string | null) {
-  if (!signedUrl) {
-    return null;
-  }
-
-  try {
-    const parsedUrl = new URL(signedUrl);
-    const marker = "/object/sign/planritningar/";
-    const markerIndex = parsedUrl.pathname.indexOf(marker);
-    if (markerIndex === -1) {
-      return null;
-    }
-
-    const encodedPath = parsedUrl.pathname.slice(markerIndex + marker.length);
-    if (!encodedPath) {
-      return null;
-    }
-
-    return decodeURIComponent(encodedPath);
-  } catch {
-    return null;
-  }
-}
-
 export function FloorplanEnhancer() {
   const router = useRouter();
   const pathname = usePathname();
@@ -768,6 +739,7 @@ export function FloorplanEnhancer() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [processingStepIndex, setProcessingStepIndex] = useState(0);
+  const [processingStatusMessage, setProcessingStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [resultImageId, setResultImageId] = useState<number | null>(
     () => cachedReviewPreview.resultImageId,
@@ -858,12 +830,11 @@ export function FloorplanEnhancer() {
       return;
     }
 
-    const stepDuration = PROCESSING_MIN_DURATION_MS / PROCESSING_STEPS.length;
     const intervalId = window.setInterval(() => {
       setProcessingStepIndex((previous) =>
         previous < PROCESSING_STEPS.length - 1 ? previous + 1 : previous,
       );
-    }, stepDuration);
+    }, PROCESSING_STEP_INTERVAL_MS);
 
     return () => {
       window.clearInterval(intervalId);
@@ -953,6 +924,25 @@ export function FloorplanEnhancer() {
               signedResult.error ||
               !signedResult.data?.signedUrl
             ) {
+              // Supabase answered, and the image is not there. The cached previews point at a
+              // deleted object or carry an expired token, so showing them yields a broken
+              // image and a review that can never be submitted.
+              clearGenerationResult();
+
+              if (!sourcePayload?.previewUrl) {
+                // The original upload is gone too, so there is nothing left to convert.
+                clearPendingSourceSelection();
+                setSourceFile(null);
+                setSourceImageId(null);
+                setSourcePreviewUrl((previous) => {
+                  revokeIfObjectUrl(previous);
+                  return null;
+                });
+              }
+
+              setErrorMessage(
+                "Den här bilden finns inte kvar. Ladda upp planritningen och konvertera på nytt.",
+              );
               return;
             }
 
@@ -1229,7 +1219,7 @@ export function FloorplanEnhancer() {
     setErrorMessage("");
     setIsSubmitting(true);
     setProcessingStepIndex(0);
-    const processingStartedAt = Date.now();
+    setProcessingStatusMessage(null);
 
     try {
       let resolvedFile = file ?? sourceFile;
@@ -1273,34 +1263,21 @@ export function FloorplanEnhancer() {
         throw new Error(resolvedMessage);
       }
 
-      await waitForMinimumProcessingDuration(processingStartedAt);
+      const conversion = await readConvertStream(response, {
+        onStatus: (event) => setProcessingStatusMessage(event.message),
+      });
 
-      const savedImageIdHeader = response.headers.get("x-saved-image-id");
-      const savedImagePath = response.headers.get("x-saved-image-path");
-      const savedImageUrl = response.headers.get("x-saved-image-url");
-      const sourceImageIdHeader = response.headers.get("x-source-image-id");
-      const parsedSavedImageId =
-        savedImageIdHeader && !Number.isNaN(Number(savedImageIdHeader))
-          ? Number(savedImageIdHeader)
-          : null;
-      const parsedSourceImageId =
-        sourceImageIdHeader && !Number.isNaN(Number(sourceImageIdHeader))
-          ? Number(sourceImageIdHeader)
-          : null;
+      const parsedSavedImageId = conversion.savedImageId;
+      const parsedSourceImageId = conversion.sourceImageId;
+      const savedImagePath = conversion.savedImagePath;
       if (parsedSourceImageId) {
         setSourceImageId(parsedSourceImageId);
       }
       setResultImageId(parsedSavedImageId);
-      setResultImagePath(savedImagePath ?? extractStoragePathFromSignedUrl(savedImageUrl));
-      const packedBuffer = await response.arrayBuffer();
-      const { compareBeforePng, resultPng } = unpackCompareResponse(packedBuffer);
-      const compareBeforeDataUrl = await blobToDataUrl(
-        new Blob([compareBeforePng], { type: "image/png" }),
-      );
+      setResultImagePath(savedImagePath);
+      const compareBeforeDataUrl = conversion.compareBefore;
       setAlignedSourcePreviewUrl(compareBeforeDataUrl);
-      const nextResultPreviewUrl = savedImageUrl
-        ? savedImageUrl
-        : URL.createObjectURL(new Blob([resultPng], { type: "image/png" }));
+      const nextResultPreviewUrl = conversion.savedImageUrl || conversion.result;
       warmCompareImageCache(compareBeforeDataUrl, nextResultPreviewUrl);
       setResultPreviewUrl((prev) => {
         revokeIfObjectUrl(prev);
@@ -1324,6 +1301,7 @@ export function FloorplanEnhancer() {
       setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
     } finally {
       setIsSubmitting(false);
+      setProcessingStatusMessage(null);
     }
   }
 
@@ -1367,6 +1345,16 @@ export function FloorplanEnhancer() {
       });
 
       if (!response.ok) {
+        // The image is gone from the database, so the cached review can never be resolved.
+        // Clear it instead of leaving the user on a dead form with a broken preview.
+        if (response.status === 404) {
+          clearGenerationResult();
+          setErrorMessage(
+            "Den här bilden finns inte kvar. Ladda upp planritningen och konvertera på nytt.",
+          );
+          return;
+        }
+
         const fallbackMessage =
           action === "approve"
             ? "Kunde inte godkänna bilden just nu."
@@ -1671,7 +1659,7 @@ export function FloorplanEnhancer() {
       />
 
       {isSubmitting ? (
-        <ProcessingView stepIndex={processingStepIndex} />
+        <ProcessingView stepIndex={processingStepIndex} statusMessage={processingStatusMessage} />
       ) : (
         <>
           {showDropzone ? (

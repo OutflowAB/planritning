@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { Loader2 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -9,13 +8,13 @@ import { FloorplanEditor } from "@/components/floorplan-editor/floorplan-editor"
 import {
   buildPlanritningarHref,
   buildVerktygHref,
-  buildVerktygListHref,
+  buildPlanritningarListHref,
   clearPendingVerktygSave,
   getPendingVerktygSave,
   setPendingVerktygSave,
 } from "@/lib/verktyg-save-session";
 import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
-import { imageDisplayName, imageDownloadBaseName } from "@/lib/image-naming";
+import { imageDownloadBaseName } from "@/lib/image-naming";
 
 type ApprovedImageRow = {
   id: number;
@@ -26,161 +25,23 @@ type ApprovedImageRow = {
   is_saved: boolean;
 };
 
-type PendingVerktygImageRow = {
-  id: number;
-  file_name: string;
-  file_path: string;
-  created_at: string;
-  preview_url: string | null;
-};
-
-function VerktygList() {
-  const pathname = usePathname();
+/**
+ * The editor is only ever reached from a specific floor plan, so there is nothing to show
+ * without one. Anyone landing here directly belongs in the list they came from.
+ */
+function RedirectToPlanritningar() {
   const router = useRouter();
-  const [images, setImages] = useState<PendingVerktygImageRow[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
+  const pathname = usePathname();
 
   useEffect(() => {
-    let active = true;
-
-    async function loadPendingImages() {
-      setIsLoading(true);
-      setLoadError("");
-
-      try {
-        const response = await fetch("/api/pending-verktyg", { cache: "no-store" });
-        const data = (await response.json()) as {
-          message?: string;
-          images?: PendingVerktygImageRow[];
-        };
-
-        if (!active) {
-          return;
-        }
-
-        if (!response.ok) {
-          setLoadError(data.message ?? "Kunde inte hämta planritningar i verktyg.");
-          setImages([]);
-          setIsLoading(false);
-          return;
-        }
-
-        setImages(data.images ?? []);
-        setIsLoading(false);
-      } catch {
-        if (!active) {
-          return;
-        }
-        setLoadError("Kunde inte hämta planritningar i verktyg just nu.");
-        setImages([]);
-        setIsLoading(false);
-      }
-    }
-
-    void loadPendingImages();
-
-    function handleLibraryUpdated() {
-      void loadPendingImages();
-    }
-
-    window.addEventListener("library-updated", handleLibraryUpdated);
-
-    return () => {
-      active = false;
-      window.removeEventListener("library-updated", handleLibraryUpdated);
-    };
-  }, []);
-
-  function openImage(image: PendingVerktygImageRow) {
-    router.push(
-      buildVerktygHref(pathname, {
-        imageId: image.id,
-        imagePath: image.file_path,
-      }),
-    );
-  }
+    router.replace(buildPlanritningarListHref(pathname));
+  }, [pathname, router]);
 
   return (
     <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
-      <div className="w-full rounded-none border border-[#d8d2c8] bg-white p-6 shadow-sm">
-        <div className="flex items-start justify-between gap-4">
-          <h1 className="text-2xl font-semibold text-[#3d3a36]">Verktyg</h1>
-        </div>
-
-        {isLoading ? (
-          <div className="mt-6 flex items-center justify-center gap-2 rounded-none border border-[#d8d2c8] bg-[#f7f4ef] px-4 py-6 text-[#6a6258]">
-            <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
-            <p className="text-sm font-medium">Hämtar planritningar...</p>
-          </div>
-        ) : null}
-
-        {loadError ? (
-          <p className="mt-6 rounded-none border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {loadError}
-          </p>
-        ) : null}
-
-        {!isLoading && !loadError && images.length === 0 ? (
-          <p className="mt-6 text-sm text-[#6a6258]">
-            Inga osparade planritningar finns i verktyg. Godkänn en genererad bild på startsidan
-            för att börja redigera här.
-          </p>
-        ) : null}
-
-        {!isLoading && !loadError && images.length > 0 ? (
-          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
-            {images.map((image) => (
-              <article
-                key={image.id}
-                className="overflow-hidden rounded-none border border-[#d8d2c8] bg-white"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
-                  <p className="text-xs font-medium text-[#7b746a]">
-                    {new Date(image.created_at).toLocaleString("sv-SE")}
-                  </p>
-                  <p className="text-xs font-semibold text-[#6a6258]">Bild {image.id}</p>
-                </div>
-
-                <div className="flex items-center justify-center bg-[#f0ece6] p-4">
-                  {image.preview_url ? (
-                    <button
-                      type="button"
-                      onClick={() => openImage(image)}
-                      className="cursor-pointer"
-                    >
-                      <Image
-                        src={image.preview_url}
-                        alt={imageDisplayName(image.id)}
-                        width={1200}
-                        height={900}
-                        className="max-h-[220px] w-auto max-w-full rounded-none border border-[#d8d2c8] bg-white object-contain"
-                      />
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => openImage(image)}
-                      className="flex h-52 w-full items-center justify-center rounded-none border border-[#d8d2c8] bg-[#f7f4ef] text-sm text-[#7b746a]"
-                    >
-                      Öppna planritning
-                    </button>
-                  )}
-                </div>
-
-                <div className="border-t border-[#e8e2d8] bg-white px-4 py-3">
-                  <button
-                    type="button"
-                    onClick={() => openImage(image)}
-                    className="w-full rounded-none border border-[#d8d2c8] bg-white px-3 py-1.5 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
-                  >
-                    Fortsätt redigera
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : null}
+      <div className="flex items-center gap-2 text-sm text-[#6a6258]" role="status">
+        <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+        Öppnar planritningar...
       </div>
     </section>
   );
@@ -322,7 +183,7 @@ function VerktygEditor() {
     }
   }
 
-  async function leaveToVerktygList() {
+  async function leaveToPlanritningar() {
     if (!approvedImage || isLeaving) {
       return;
     }
@@ -332,7 +193,7 @@ function VerktygEditor() {
 
     try {
       clearPendingVerktygSave();
-      router.push(buildVerktygListHref(pathname));
+      router.push(buildPlanritningarListHref(pathname));
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "Kunde inte lämna redigeraren.");
       setIsLeaving(false);
@@ -351,7 +212,7 @@ function VerktygEditor() {
           approvedImage={fallbackImage}
           imageLoadError={loadError}
           onSaveToLibrary={saveToLibrary}
-          onLeaveWithoutSaving={leaveToVerktygList}
+          onLeaveWithoutSaving={leaveToPlanritningar}
           isPublishing={isPublishing}
           isLeaving={isLeaving}
         />
@@ -374,14 +235,14 @@ function VerktygEditor() {
       : null);
 
   if (!editorImage) {
-    return <VerktygList />;
+    return <RedirectToPlanritningar />;
   }
 
   return (
     <FloorplanEditor
       approvedImage={editorImage}
       onSaveToLibrary={saveToLibrary}
-      onLeaveWithoutSaving={leaveToVerktygList}
+      onLeaveWithoutSaving={leaveToPlanritningar}
       isPublishing={isPublishing}
       isLeaving={isLeaving}
     />
@@ -423,7 +284,7 @@ function VerktygContent() {
   }
 
   if (!imageIdParam && !imagePathParam) {
-    return <VerktygList />;
+    return <RedirectToPlanritningar />;
   }
 
   return <VerktygEditor />;
