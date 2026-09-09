@@ -14,6 +14,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { ComponentType, ReactNode, SVGProps, useCallback, useEffect, useMemo, useState } from "react";
 
 import { apiJson } from "@/lib/api-client";
+import { GENERATION_UPDATED_EVENT } from "@/lib/app-events";
 import { setAuthenticated } from "@/lib/auth";
 
 type DashboardShellProps = {
@@ -48,10 +49,6 @@ const adminBillingItem = {
 } as const satisfies { label: string; href: string; icon: SidebarIcon };
 
 const IMAGE_GENERATION_COST_SEK = 50;
-const UPLOADS_TABLE = "uploaded_images";
-const GENERATED_UPLOADS_PREFIX = "generated/";
-const GENERATION_EVENTS_EVENT = "generation_events";
-const LEGACY_GENERATION_EVENT = "generation-updated";
 const GENERATION_COUNT_CACHE_KEY = "generation-count-cache-v1";
 
 /**
@@ -153,13 +150,11 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
       void loadGenerationStats();
     }
 
-    window.addEventListener(GENERATION_EVENTS_EVENT, handleGenerationUpdated);
-    window.addEventListener(LEGACY_GENERATION_EVENT, handleGenerationUpdated);
+    window.addEventListener(GENERATION_UPDATED_EVENT, handleGenerationUpdated);
 
     return () => {
       window.clearTimeout(timer);
-      window.removeEventListener(GENERATION_EVENTS_EVENT, handleGenerationUpdated);
-      window.removeEventListener(LEGACY_GENERATION_EVENT, handleGenerationUpdated);
+      window.removeEventListener(GENERATION_UPDATED_EVENT, handleGenerationUpdated);
     };
   }, [loadGenerationStats]);
 

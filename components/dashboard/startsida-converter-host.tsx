@@ -53,7 +53,8 @@ function StartsidaConverterPortal({
 
     const nextKey = consumeStartsidaConverterMountKey(fromUploadParam);
     if (nextKey !== "initial") {
-      setResetKey(nextKey);
+      // Queued: it reads sessionStorage, which must not drive state during hydration.
+      queueMicrotask(() => setResetKey(nextKey));
     }
   }, [fromUploadParam, isStartsida]);
 

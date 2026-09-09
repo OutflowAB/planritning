@@ -103,16 +103,24 @@ export function ImageCompareSlider({
     const bothCached =
       loadedCompareImageSrcs.has(afterSrc) && loadedCompareImageSrcs.has(beforeSrc);
 
-    if (!bothCached) {
-      setImagesReady(false);
-      setIsTransitionEnabled(false);
-      setIsEntranceAnimating(false);
-      setRenderedSize({ width: 0, height: 0 });
-      setPosition(50);
-      entrancePlayedForSrcRef.current = null;
-    } else {
-      setImagesReady(true);
-    }
+    // The reset is queued rather than run in the effect body. useEffect already runs after
+    // paint, so nothing is visible for longer; it only keeps the update out of the render
+    // cascade React warns about.
+    queueMicrotask(() => {
+      if (cancelled) {
+        return;
+      }
+      if (!bothCached) {
+        setImagesReady(false);
+        setIsTransitionEnabled(false);
+        setIsEntranceAnimating(false);
+        setRenderedSize({ width: 0, height: 0 });
+        setPosition(50);
+        entrancePlayedForSrcRef.current = null;
+      } else {
+        setImagesReady(true);
+      }
+    });
 
     void Promise.all([preloadImage(afterSrc), preloadImage(beforeSrc)])
       .then(() => {
@@ -258,6 +266,7 @@ export function ImageCompareSlider({
       aria-busy={!imagesReady}
     >
       <div className="relative w-fit max-w-full min-h-[min(60vh,640px)]">
+        {/* eslint-disable-next-line @next/next/no-img-element -- sized to the measured frame; next/image's wrapper would break the slider geometry */}
         <img
           src={afterSrc}
           alt={afterAlt}
@@ -283,6 +292,7 @@ export function ImageCompareSlider({
                 height: renderedSize.height > 0 ? renderedSize.height : "100%",
               }}
             >
+              {/* eslint-disable-next-line @next/next/no-img-element -- must match the after image pixel for pixel */}
               <img
                 src={beforeSrc}
                 alt={beforeAlt}

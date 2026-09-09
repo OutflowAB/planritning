@@ -51,7 +51,8 @@ import {
   hasPendingSourceSelection,
   setPendingSourceSelection,
 } from "@/lib/startsida-source-session";
-import { apiJson } from "@/lib/api-client";
+import { ApiError, apiFetch, apiJson } from "@/lib/api-client";
+import { dispatchGenerationUpdated } from "@/lib/app-events";
 import { imageUrl } from "@/lib/image-url";
 import type { ImageListItem } from "@/app/api/images/route";
 import {
@@ -62,8 +63,6 @@ import {
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const UPLOADS_PREFIX = "uploads/";
-const GENERATION_EVENTS_EVENT = "generation_events";
-const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
@@ -178,16 +177,13 @@ async function rebuildCompareBeforePreview(
     payload.append("layout", JSON.stringify(layout));
   }
 
-  const compareResponse = await fetch("/api/compare-before", {
-    method: "POST",
-    body: payload,
-  });
-
-  if (!compareResponse.ok) {
+  try {
+    const compareResponse = await apiFetch("/api/compare-before", { method: "POST", body: payload });
+    return await blobToDataUrl(await compareResponse.blob());
+  } catch {
+    // The caller treats a missing before-image as "show the result without a comparison".
     return null;
   }
-
-  return blobToDataUrl(await compareResponse.blob());
 }
 
 function peekTransferredSourcePreview() {
@@ -938,6 +934,11 @@ export function FloorplanEnhancer() {
         }
       }
 
+      // The lookup above may resolve after the user has already left.
+      if (isCancelled) {
+        return;
+      }
+
       if (transferredSource?.previewUrl) {
         applyTransferredSource(transferredSource);
       }
@@ -1029,24 +1030,7 @@ export function FloorplanEnhancer() {
         payload.append("feedback", feedback);
       }
 
-      const response = await fetch("/api/convert", {
-        method: "POST",
-        body: payload,
-      });
-
-      if (!response.ok) {
-        const fallbackMessage = "Kunde inte bearbeta bilden. Försök igen.";
-        let resolvedMessage = fallbackMessage;
-        try {
-          const data = (await response.json()) as { message?: string };
-          if (data?.message) {
-            resolvedMessage = data.message;
-          }
-        } catch {
-          // Ignore JSON parse issues and use fallback message.
-        }
-        throw new Error(resolvedMessage);
-      }
+      const response = await apiFetch("/api/convert", { method: "POST", body: payload });
 
       const conversion = await readConvertStream(response, {
         onStatus: (event) => setProcessingStatusMessage(event.message),
@@ -1080,9 +1064,7 @@ export function FloorplanEnhancer() {
           layout: conversion.layout,
         });
       }
-      window.dispatchEvent(new Event("library-updated"));
-      window.dispatchEvent(new Event(GENERATION_EVENTS_EVENT));
-      window.dispatchEvent(new Event(LEGACY_GENERATION_EVENT));
+      dispatchGenerationUpdated();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
     } finally {
@@ -1117,71 +1099,37 @@ export function FloorplanEnhancer() {
     setIsReviewSubmitting(true);
 
     try {
-      const response = await fetch("/api/review-generation", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          action,
-          imageId: resultImageId,
-          filePath: resultImagePath,
-          ...(action === "reject" ? { comment: trimmedComment } : {}),
-        }),
-      });
-
-      if (!response.ok) {
+      try {
+        await apiFetch("/api/review-generation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action,
+            imageId: resultImageId,
+            filePath: resultImagePath,
+            ...(action === "reject" ? { comment: trimmedComment } : {}),
+          }),
+        });
+      } catch (error) {
         // The image is gone from the database, so the cached review can never be resolved.
         // Clear it instead of leaving the user on a dead form with a broken preview.
-        if (response.status === 404) {
+        if (error instanceof ApiError && error.kind === "not-found") {
           clearGenerationResult();
           setErrorMessage(
             "Den här bilden finns inte kvar. Ladda upp planritningen och konvertera på nytt.",
           );
           return;
         }
-
-        const fallbackMessage =
-          action === "approve"
-            ? "Kunde inte godkänna bilden just nu."
-            : "Kunde inte neka bilden just nu.";
-        let resolvedMessage = fallbackMessage;
-        try {
-          const data = (await response.json()) as { message?: string };
-          if (data?.message) {
-            resolvedMessage = data.message;
-          }
-        } catch {
-          // Ignore JSON parse issues and use fallback message.
-        }
-        throw new Error(resolvedMessage);
+        throw error;
       }
 
       if (action === "approve") {
         if (destination === "planritningar") {
-          const saveResponse = await fetch("/api/save-generation", {
+          await apiFetch("/api/save-generation", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              imageId: resultImageId,
-              filePath: resultImagePath,
-            }),
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ imageId: resultImageId, filePath: resultImagePath }),
           });
-
-          if (!saveResponse.ok) {
-            let resolvedMessage = "Kunde inte spara bilden i planritningar just nu.";
-            try {
-              const data = (await saveResponse.json()) as { message?: string };
-              if (data?.message) {
-                resolvedMessage = data.message;
-              }
-            } catch {
-              // Ignore JSON parse issues and use fallback message.
-            }
-            throw new Error(resolvedMessage);
-          }
 
           clearPendingVerktygSave();
           clearPendingGenerationReview();
@@ -1189,9 +1137,7 @@ export function FloorplanEnhancer() {
           setShowApproveDestinationModal(false);
           setSectionOverlayTarget(null);
           setRejectComment("");
-          window.dispatchEvent(new Event("library-updated"));
-          window.dispatchEvent(new Event(GENERATION_EVENTS_EVENT));
-          window.dispatchEvent(new Event(LEGACY_GENERATION_EVENT));
+          dispatchGenerationUpdated();
           router.push(
             buildPlanritningarHref(pathname, {
               imageId: resultImageId,
@@ -1219,9 +1165,7 @@ export function FloorplanEnhancer() {
       // kept and converted again straight away, with the comment passed along as a correction.
       clearGenerationResult();
       showToast("Konverterar bilden på nytt med din kommentar.");
-      window.dispatchEvent(new Event("library-updated"));
-      window.dispatchEvent(new Event(GENERATION_EVENTS_EVENT));
-      window.dispatchEvent(new Event(LEGACY_GENERATION_EVENT));
+      dispatchGenerationUpdated();
       setIsReviewSubmitting(false);
       void processImage(undefined, trimmedComment);
       return;
@@ -1273,15 +1217,6 @@ export function FloorplanEnhancer() {
 
     setPreviewZoom(1);
     setPreviewImageType("source");
-  }
-
-  function openResultPreview() {
-    if (!resultPreviewUrl) {
-      return;
-    }
-
-    setPreviewZoom(1);
-    setPreviewImageType("result");
   }
 
   function closeImagePreview() {
@@ -1356,6 +1291,13 @@ export function FloorplanEnhancer() {
     });
   }
 
+  const closeApproveDestinationModalRef = useRef(closeApproveDestinationModal);
+  const closeImagePreviewRef = useRef(closeImagePreview);
+  useLayoutEffect(() => {
+    closeApproveDestinationModalRef.current = closeApproveDestinationModal;
+    closeImagePreviewRef.current = closeImagePreview;
+  });
+
   useEffect(() => {
     if (!previewImageType && !showApproveDestinationModal) {
       return;
@@ -1367,11 +1309,11 @@ export function FloorplanEnhancer() {
       }
 
       if (showApproveDestinationModal) {
-        closeApproveDestinationModal();
+        closeApproveDestinationModalRef.current();
         return;
       }
 
-      closeImagePreview();
+      closeImagePreviewRef.current();
     }
 
     document.addEventListener("keydown", handleEscape);

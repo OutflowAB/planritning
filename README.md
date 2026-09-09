@@ -77,7 +77,11 @@ sa genereringsrader tas bort nar originalbilden tas bort.
 ## Deploy
 
 - Planerad doman: `skandiamaklarna.outflow.se`
-- Satt `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `SUPERADMIN_EMAIL`, `SUPERADMIN_PASSWORD`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` och `OPENAI_API_KEY` som Vercel Environment Variables.
+- Satt `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `SUPERADMIN_EMAIL`, `SUPERADMIN_PASSWORD`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY` och `AUTH_SECRET` som Vercel Environment Variables.
+- Sessionskuben ar signerad sedan 2026-09-09. Vid forsta deploy av den versionen loggas alla
+  befintliga sessioner ut en gang - det ar avsett.
+- Nar den versionen ar deployad: kor `database/2026-09-09-lock-down-anon.sql` i Supabase SQL
+  Editor sa att den publika anon-nyckeln inte langre kan lasa eller skriva nagot.
 - `/api/convert` har `maxDuration = 300`. Kontrollera att Vercel-planen tillater sa langa
   funktionsanrop, annars kapas langa genereringar.
-- Supabase ar forberett for framtida datahantering och anvands inte for autentisering.
+- Supabase anvands for lagring och data, inte for autentisering; inloggning sker med de konfigurerade kontona ovan.

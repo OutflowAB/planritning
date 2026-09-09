@@ -112,7 +112,9 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
     visible: false,
   });
 
-  controllerRef.current = controller;
+  useLayoutEffect(() => {
+    controllerRef.current = controller;
+  });
 
   const isEraserActive = controller.activeTool === "eraser";
 

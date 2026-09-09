@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import type React from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { describeError, isAbortError } from "@/lib/api-client";
 import { readListCache, writeListCache } from "@/lib/list-cache";
@@ -25,6 +26,8 @@ export type CachedListState<T> = {
   isRefreshing: boolean;
   error: string | null;
   reload: () => void;
+  /** For optimistic updates, e.g. dropping a row the user just deleted. */
+  setItems: React.Dispatch<React.SetStateAction<T[]>>;
 };
 
 export function useCachedList<T>(
@@ -38,8 +41,11 @@ export function useCachedList<T>(
   const [isRefreshing, setIsRefreshing] = useState(cached !== null);
   const [error, setError] = useState<string | null>(null);
   const [generation, setGeneration] = useState(0);
+  // Latest fetcher, written in a layout effect so the ref is never touched during render.
   const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
+  useLayoutEffect(() => {
+    fetcherRef.current = fetcher;
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -88,5 +94,5 @@ export function useCachedList<T>(
     setGeneration((value) => value + 1);
   }, []);
 
-  return { items, isLoading, isRefreshing, error, reload };
+  return { items, isLoading, isRefreshing, error, reload, setItems };
 }

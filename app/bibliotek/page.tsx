@@ -12,7 +12,7 @@ import {
   X,
 } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { TouchEvent, WheelEvent, useEffect, useRef, useState } from "react";
+import { TouchEvent, WheelEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { getStoredRole } from "@/lib/auth";
 import {
@@ -21,16 +21,15 @@ import {
 } from "@/lib/floorplan/export-library";
 import { ThumbnailImage } from "@/components/ui/thumbnail-image";
 import { imageDisplayName, imageDownloadBaseName } from "@/lib/image-naming";
-import { apiJson, describeError } from "@/lib/api-client";
+import { apiFetch, apiJson, describeError } from "@/lib/api-client";
 import { imageUrl } from "@/lib/image-url";
 import { prefetchImage } from "@/lib/prefetch-image";
-import { readListCache, writeListCache } from "@/lib/list-cache";
+import { dispatchGenerationUpdated, dispatchLibraryUpdated, LIBRARY_UPDATED_EVENT, subscribeToAppEvent } from "@/lib/app-events";
+import { useCachedList } from "@/lib/use-cached-list";
 import type { ImageListItem } from "@/app/api/images/route";
 import { buildVerktygHref, setPendingVerktygSave } from "@/lib/verktyg-save-session";
 
 const LIBRARY_LIST_CACHE_KEY = "library-list-cache-v2";
-const GENERATION_EVENTS_EVENT = "generation_events";
-const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
@@ -68,8 +67,11 @@ function withImageUrls(item: ImageListItem): GeneratedImageRow {
   };
 }
 
-function readLibraryListCache() {
-  return readListCache<GeneratedImageRow>(LIBRARY_LIST_CACHE_KEY);
+async function fetchLibrary(signal: AbortSignal): Promise<GeneratedImageRow[]> {
+  const { items } = await apiJson<{ items: ImageListItem[] }>("/api/images?kind=generated&saved=1", {
+    signal,
+  });
+  return items.map(withImageUrls);
 }
 
 export default function BibliotekPage() {
@@ -77,17 +79,16 @@ export default function BibliotekPage() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const canDelete = pathname.startsWith("/admin") || getStoredRole() === "admin";
-  // Seeded from the cache during the first render. Reading it in an effect instead would
-  // paint an empty skeleton for one frame on every revisit.
-  const [cachedRows] = useState(() => readLibraryListCache());
-  const [isLoading, setIsLoading] = useState(() => cachedRows === null);
-  // True while a cached list is on screen and a refresh is running behind it.
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [loadError, setLoadError] = useState("");
+  const {
+    items: images,
+    setItems: setImages,
+    isLoading,
+    isRefreshing,
+    error: loadError,
+    reload: reloadLibrary,
+  } = useCachedList<GeneratedImageRow>(LIBRARY_LIST_CACHE_KEY, fetchLibrary, "Kunde inte hämta biblioteket.");
+  const [actionError, setActionError] = useState("");
   const [actionSuccess, setActionSuccess] = useState("");
-  const [images, setImages] = useState<GeneratedImageRow[]>(
-    () => cachedRows ?? [],
-  );
   const [selectedImageIds, setSelectedImageIds] = useState<number[]>([]);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [isPreviewDownloading, setIsPreviewDownloading] = useState(false);
@@ -114,17 +115,6 @@ export default function BibliotekPage() {
       (previewImageId && String(image.id) === previewImageId) ||
       (previewImagePath && image.file_path === previewImagePath),
   );
-
-  function setQueryParam(paramName: string, value?: string) {
-    const params = new URLSearchParams(searchParams.toString());
-    if (value) {
-      params.set(paramName, value);
-    } else {
-      params.delete(paramName);
-    }
-    const queryString = params.toString();
-    router.replace(queryString ? `${pathname}?${queryString}` : pathname, { scroll: false });
-  }
 
   function setQueryParams(updates: Record<string, string | undefined>) {
     const params = new URLSearchParams(searchParams.toString());
@@ -234,7 +224,7 @@ export default function BibliotekPage() {
 
     setIsPreviewDownloading(true);
     setDownloadingFormat(format);
-    setLoadError("");
+    setActionError("");
 
     try {
       await exportLibraryFloorplan({
@@ -246,7 +236,7 @@ export default function BibliotekPage() {
       });
       setShowDownloadMenu(false);
     } catch {
-      setLoadError("Kunde inte ladda ner bilden just nu.");
+      setActionError("Kunde inte ladda ner bilden just nu.");
     } finally {
       setIsPreviewDownloading(false);
       setDownloadingFormat(null);
@@ -260,30 +250,20 @@ export default function BibliotekPage() {
 
     setEditingImageId(image.id);
     setIsSendingToVerktyg(true);
-    setLoadError("");
+    setActionError("");
 
     try {
-      const response = await fetch("/api/unsave-generation", {
+      await apiFetch("/api/unsave-generation", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          imageId: image.id,
-          filePath: image.file_path,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageId: image.id, filePath: image.file_path }),
       });
-      const data = (await response.json()) as { message?: string };
-
-      if (!response.ok) {
-        throw new Error(data.message ?? "Kunde inte öppna bilden i verktyg.");
-      }
 
       setPendingVerktygSave({
         imageId: image.id,
         imagePath: image.file_path,
       });
-      window.dispatchEvent(new Event("library-updated"));
+      dispatchLibraryUpdated();
       router.push(
         buildVerktygHref(pathname, {
           imageId: image.id,
@@ -291,7 +271,7 @@ export default function BibliotekPage() {
         }),
       );
     } catch (error) {
-      setLoadError(
+      setActionError(
         error instanceof Error ? error.message : "Kunde inte öppna bilden i verktyg.",
       );
       setIsSendingToVerktyg(false);
@@ -318,7 +298,7 @@ export default function BibliotekPage() {
       return;
     }
 
-    setLoadError("");
+    setActionError("");
     setActionSuccess("");
     setIsDeletingSelected(true);
 
@@ -329,21 +309,15 @@ export default function BibliotekPage() {
 
     try {
       for (const image of selectedImages) {
-        const response = await fetch("/api/admin/delete-image", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            id: image.id,
-            filePath: image.file_path,
-          }),
-        });
-        const data = (await response.json()) as { message?: string };
-
-        if (!response.ok) {
+        try {
+          await apiFetch("/api/admin/delete-image", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id: image.id, filePath: image.file_path }),
+          });
+        } catch (error) {
           failedCount += 1;
-          lastErrorMessage = data.message ?? "Kunde inte ta bort bilden.";
+          lastErrorMessage = describeError(error, "Kunde inte ta bort bilden.") ?? lastErrorMessage;
           continue;
         }
 
@@ -362,14 +336,12 @@ export default function BibliotekPage() {
             ? "1 bild raderades."
             : `${deletedIds.length} bilder raderades.`,
         );
-        await loadLibrary(true);
-        window.dispatchEvent(new CustomEvent("library-updated"));
-        window.dispatchEvent(new Event(GENERATION_EVENTS_EVENT));
-        window.dispatchEvent(new Event(LEGACY_GENERATION_EVENT));
+        reloadLibrary();
+        dispatchGenerationUpdated();
       }
 
       if (failedCount > 0) {
-        setLoadError(
+        setActionError(
           failedCount === 1
             ? lastErrorMessage || "Kunde inte ta bort en markerad bild."
             : `Kunde inte ta bort ${failedCount} markerade bilder.`,
@@ -380,66 +352,15 @@ export default function BibliotekPage() {
     }
   }
 
-  async function loadLibrary(forceRefresh = false) {
-    setLoadError("");
 
-    const restoredRows = forceRefresh ? null : readLibraryListCache();
-    if (restoredRows) {
-      // Paint the cached list straight away and revalidate behind it, so an image deleted
-      // elsewhere disappears instead of lingering until the cache expires.
-      setImages(restoredRows);
-      setIsLoading(false);
-      setIsRefreshing(true);
-    } else {
-      setIsLoading(true);
-    }
+  useEffect(() => subscribeToAppEvent(LIBRARY_UPDATED_EVENT, reloadLibrary), [reloadLibrary]);
 
-    let rows: GeneratedImageRow[];
-    try {
-      const { items } = await apiJson<{ items: ImageListItem[] }>(
-        "/api/images?kind=generated&saved=1",
-      );
-      rows = items.map(withImageUrls);
-    } catch (error) {
-      const message = describeError(error, "Kunde inte hämta biblioteket.");
-      if (message) {
-        setLoadError(message);
-      }
-      setIsLoading(false);
-      setIsRefreshing(false);
-      return;
-    }
-
-    setImages(rows);
-    setSelectedImageIds((previous) => previous.filter((id) => rows.some((row) => row.id === id)));
-    writeListCache(LIBRARY_LIST_CACHE_KEY, rows);
-    setIsLoading(false);
-    setIsRefreshing(false);
-  }
-
+  // A selection cannot outlive the rows it points at.
   useEffect(() => {
-    const shouldForceRefresh =
-      Boolean(previewImageId) ||
-      Boolean(previewImagePath) ||
-      Boolean(selectedImageId) ||
-      Boolean(selectedImagePath);
-
-    const timer = window.setTimeout(() => {
-      void loadLibrary(shouldForceRefresh);
-    }, 0);
-
-    function handleLibraryUpdated() {
-      void loadLibrary(true);
-    }
-
-    window.addEventListener("library-updated", handleLibraryUpdated);
-
-    return () => {
-      window.clearTimeout(timer);
-      window.removeEventListener("library-updated", handleLibraryUpdated);
-    };
-  }, [previewImageId, previewImagePath, selectedImageId, selectedImagePath]);
-
+    queueMicrotask(() => {
+      setSelectedImageIds((previous) => previous.filter((id) => images.some((row) => row.id === id)));
+    });
+  }, [images]);
   useEffect(() => {
     if (!selectedImage || images.length === 0) {
       return;
@@ -453,13 +374,12 @@ export default function BibliotekPage() {
     targetElement.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [images, selectedImage]);
 
-  useEffect(() => {
-    if (!previewImage) {
-      return;
-    }
-    setPreviewZoom(1);
-    setShowDownloadMenu(false);
-  }, [previewImage]);
+  // Latest close handler, so the keyboard effect neither re-subscribes on every render nor
+  // closes over a stale one.
+  const closeImagePreviewRef = useRef(closeImagePreview);
+  useLayoutEffect(() => {
+    closeImagePreviewRef.current = closeImagePreview;
+  });
 
   useEffect(() => {
     if (!previewImage) {
@@ -476,7 +396,7 @@ export default function BibliotekPage() {
           return false;
         }
 
-        closeImagePreview();
+        closeImagePreviewRef.current();
         return false;
       });
     }
@@ -550,9 +470,9 @@ export default function BibliotekPage() {
           </p>
         ) : null}
 
-        {loadError ? (
+        {loadError || actionError ? (
           <p className="mt-6 rounded-none border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {loadError}
+            {actionError || loadError}
           </p>
         ) : null}
         {actionSuccess ? (

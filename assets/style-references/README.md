@@ -19,10 +19,9 @@ prompten genom att redigera den filen — ingen kod behöver röras.
 ## Så behandlas de innan de skickas
 
 Bilderna skickas inte i original. `lib/image/ai-floorplan.ts` skalar ned dem till max
-1024 px längsta sida och tröskar dem till rent svartvitt. Det gör två saker: den beiga
-bakgrunden försvinner så referenserna visar samma svart-på-vitt-linjeritning som modellen
-ska producera, och kostnaden hålls nere — varje referensbild debiteras som high fidelity-input.
-Sex referenser blir cirka 96 KB totalt efter behandlingen.
+1024 px längsta sida men behåller färgerna — modellen ska återge den beiga paletten, så den
+behöver se den. Nedskalningen håller kostnaden nere, eftersom varje referensbild debiteras
+som high fidelity-input.
 
 ## Att tänka på
 

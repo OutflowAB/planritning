@@ -13,6 +13,8 @@ import {
   getPendingVerktygSave,
   setPendingVerktygSave,
 } from "@/lib/verktyg-save-session";
+import { apiFetch, apiJson, describeError } from "@/lib/api-client";
+import { dispatchLibraryUpdated } from "@/lib/app-events";
 import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
 import { imageDownloadBaseName } from "@/lib/image-naming";
 
@@ -86,19 +88,16 @@ function VerktygEditor() {
       }
 
       try {
-        const response = await fetch(`/api/approved-generation?${params.toString()}`, {
-          cache: "no-store",
-        });
-        const data = (await response.json()) as {
-          message?: string;
-          image?: ApprovedImageRow;
-        };
+        const data = await apiJson<{ message?: string; image?: ApprovedImageRow }>(
+          `/api/approved-generation?${params.toString()}`,
+          { cache: "no-store" },
+        );
 
         if (!active) {
           return;
         }
 
-        if (!response.ok || !data.image?.preview_url) {
+        if (!data.image?.preview_url) {
           clearPendingVerktygSave();
           setLoadError(data.message ?? "Kunde inte hämta den godkända bilden.");
           return;
@@ -121,12 +120,12 @@ function VerktygEditor() {
         });
 
         setApprovedImage(data.image);
-      } catch {
+      } catch (error) {
         if (!active) {
           return;
         }
         clearPendingVerktygSave();
-        setLoadError("Kunde inte hämta den godkända bilden just nu.");
+        setLoadError(describeError(error, "Kunde inte hämta den godkända bilden just nu.") ?? "Kunde inte hämta den godkända bilden just nu.");
       }
     }
 
@@ -142,21 +141,11 @@ function VerktygEditor() {
       return;
     }
 
-    const response = await fetch("/api/save-generation", {
+    await apiFetch("/api/save-generation", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        imageId: approvedImage.id,
-        filePath: approvedImage.file_path,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageId: approvedImage.id, filePath: approvedImage.file_path }),
     });
-    const data = (await response.json()) as { message?: string };
-
-    if (!response.ok) {
-      throw new Error(data.message ?? "Kunde inte spara bilden just nu.");
-    }
   }
 
   async function saveToLibrary() {
@@ -170,7 +159,7 @@ function VerktygEditor() {
     try {
       await saveImageToLibrary();
       clearPendingVerktygSave();
-      window.dispatchEvent(new Event("library-updated"));
+      dispatchLibraryUpdated();
       router.push(
         buildPlanritningarHref(pathname, {
           imageId: approvedImage.id,
@@ -258,18 +247,23 @@ function VerktygContent() {
   const [isRestoringSession, setIsRestoringSession] = useState(() => !imageIdParam && !imagePathParam);
 
   useEffect(() => {
-    if (imageIdParam || imagePathParam) {
+    // Deferred past the effect body: the decision reads sessionStorage, which the server
+    // render could not see, so it must not feed back into state during hydration.
+    const timer = window.setTimeout(() => {
+      if (imageIdParam || imagePathParam) {
+        setIsRestoringSession(false);
+        return;
+      }
+
+      const pendingSave = getPendingVerktygSave();
+      if (pendingSave) {
+        router.replace(buildVerktygHref(pathname, pendingSave));
+        return;
+      }
+
       setIsRestoringSession(false);
-      return;
-    }
-
-    const pendingSave = getPendingVerktygSave();
-    if (pendingSave) {
-      router.replace(buildVerktygHref(pathname, pendingSave));
-      return;
-    }
-
-    setIsRestoringSession(false);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [imageIdParam, imagePathParam, pathname, router]);
 
   if (isRestoringSession) {

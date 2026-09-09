@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireRole } from "@/lib/server-auth";
-import { getAdminSupabase, serverConfigMissingResponse } from "@/lib/supabase-server";
+import { imageUrl } from "@/lib/image-url";
+import { getAdminSupabase, normaliseEtag, serverConfigMissingResponse } from "@/lib/supabase-server";
 
 const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
@@ -63,13 +64,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ message: "Bilden är inte godkänd ännu." }, { status: 403 });
   }
 
-  const { data: signedData, error: signError } = await adminSupabase.storage
+  // Versioned so the browser can cache it as immutable; a republished plan gets a new URL.
+  const folder = GENERATED_PREFIX.replace(/\/$/, "");
+  const { data: listed } = await adminSupabase.storage
     .from(BUCKET_NAME)
-    .createSignedUrl(imageRow.file_path, 3600);
-
-  if (signError || !signedData?.signedUrl) {
-    return NextResponse.json({ message: "Kunde inte ladda bildförhandsvisningen." }, { status: 500 });
-  }
+    .list(folder, { search: imageRow.file_path.slice(folder.length + 1), limit: 1 });
+  const version = normaliseEtag((listed?.[0]?.metadata as { eTag?: unknown } | null)?.eTag);
 
   return NextResponse.json({
     image: {
@@ -77,7 +77,7 @@ export async function GET(request: Request) {
       file_name: imageRow.file_name,
       file_path: imageRow.file_path,
       created_at: imageRow.created_at,
-      preview_url: signedData.signedUrl,
+      preview_url: imageUrl(imageRow.id, "full", version),
       is_saved: Boolean(imageRow.saved_at),
     },
   });

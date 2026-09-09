@@ -2,7 +2,7 @@
 
 import { Download, Loader2, Minus, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChangeEvent, DragEvent, TouchEvent, WheelEvent, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { ChangeEvent, DragEvent, TouchEvent, WheelEvent, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { isAuthenticated } from "@/lib/auth";
 import {
@@ -13,7 +13,8 @@ import { ThumbnailImage } from "@/components/ui/thumbnail-image";
 import { apiFetch, apiJson, describeError } from "@/lib/api-client";
 import { imageUrl } from "@/lib/image-url";
 import { prefetchImage } from "@/lib/prefetch-image";
-import { readListCache, writeListCache } from "@/lib/list-cache";
+import { dispatchGenerationUpdated, LIBRARY_UPDATED_EVENT, subscribeToAppEvent } from "@/lib/app-events";
+import { useCachedList } from "@/lib/use-cached-list";
 import type { ImageListItem } from "@/app/api/images/route";
 import {
   hasUnfinishedConverterSession,
@@ -23,8 +24,6 @@ import { useToast } from "@/components/ui/toast-provider";
 
 const UPLOADS_LIST_CACHE_KEY = "uploads-list-cache-v2";
 const CONVERTER_TRANSFER_KEY = "converter-selected-upload-v1";
-const GENERATION_EVENTS_EVENT = "generation_events";
-const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
@@ -56,8 +55,9 @@ function withImageUrls(item: ImageListItem): UploadedImageRow {
   };
 }
 
-function readUploadsListCache() {
-  return readListCache<UploadedImageRow>(UPLOADS_LIST_CACHE_KEY);
+async function fetchUploads(signal: AbortSignal): Promise<UploadedImageRow[]> {
+  const { items } = await apiJson<{ items: ImageListItem[] }>("/api/images?kind=uploads", { signal });
+  return items.map(withImageUrls);
 }
 
 type ConverterTransferPayload = {
@@ -85,14 +85,15 @@ export default function UppladdningarPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  // Seeded from the cache during the first render. Reading it in an effect instead would
-  // paint an empty skeleton for one frame on every revisit.
-  const [cachedUploadRows] = useState(() => readUploadsListCache());
-  const [isLoadingUploads, setIsLoadingUploads] = useState(() => cachedUploadRows === null);
-  // True while a cached list is on screen and a refresh is running behind it.
-  const [isRefreshingUploads, setIsRefreshingUploads] = useState(false);
-  const [uploadsLoadFailed, setUploadsLoadFailed] = useState(false);
-  const [uploads, setUploads] = useState<UploadedImageRow[]>(() => cachedUploadRows ?? []);
+  const {
+    items: uploads,
+    setItems: setUploads,
+    isLoading: isLoadingUploads,
+    isRefreshing: isRefreshingUploads,
+    error: uploadsLoadError,
+    reload: reloadUploads,
+  } = useCachedList<UploadedImageRow>(UPLOADS_LIST_CACHE_KEY, fetchUploads, "Kunde inte hämta uppladdningar.");
+  const uploadsLoadFailed = uploadsLoadError !== null;
   const [selectedUploadIds, setSelectedUploadIds] = useState<number[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [loadedPreviewIds, setLoadedPreviewIds] = useState<Record<number, boolean>>({});
@@ -281,9 +282,8 @@ export default function UppladdningarPage() {
     const selectedUploads = uploads.filter((upload) => selectedUploadIds.includes(upload.id));
 
     try {
-      const response = await fetch("/api/delete-uploads", {
+      const response = await apiFetch("/api/delete-uploads", {
         method: "POST",
-        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
@@ -321,10 +321,8 @@ export default function UppladdningarPage() {
             ? "1 uppladdning raderades."
             : `${deletedIds.length} uppladdningar raderades.`,
         );
-        await loadUploads(true);
-        window.dispatchEvent(new CustomEvent("library-updated"));
-        window.dispatchEvent(new Event(GENERATION_EVENTS_EVENT));
-        window.dispatchEvent(new Event(LEGACY_GENERATION_EVENT));
+        reloadUploads();
+        dispatchGenerationUpdated();
       }
 
       if (!response.ok && deletedIds.length === 0) {
@@ -345,59 +343,29 @@ export default function UppladdningarPage() {
     }
   }
 
-  async function loadUploads(forceRefresh = false) {
-    setUploadsLoadFailed(false);
 
-    const restoredRows = forceRefresh ? null : readUploadsListCache();
-    if (restoredRows) {
-      // Paint the cached list immediately, then revalidate behind it, so rows deleted
-      // elsewhere do not stay on screen until the cache expires.
-      setUploads(restoredRows);
-      setIsLoadingUploads(false);
-      setIsRefreshingUploads(true);
-    } else {
-      setIsLoadingUploads(true);
-    }
+  useEffect(() => subscribeToAppEvent(LIBRARY_UPDATED_EVENT, reloadUploads), [reloadUploads]);
 
-    let rows: UploadedImageRow[];
-    try {
-      const { items } = await apiJson<{ items: ImageListItem[] }>("/api/images?kind=uploads");
-      rows = items.map(withImageUrls);
-    } catch (error) {
-      const message = describeError(error, "Kunde inte hämta uppladdningar.");
-      if (message) {
-        setUploadsLoadFailed(true);
-        showToast(message, "error");
-      }
-      setIsLoadingUploads(false);
-      setIsRefreshingUploads(false);
-      return;
-    }
-
-    setUploads(rows);
-    setSelectedUploadIds((previous) => previous.filter((id) => rows.some((row) => row.id === id)));
-    writeListCache(UPLOADS_LIST_CACHE_KEY, rows);
-    setIsLoadingUploads(false);
-    setIsRefreshingUploads(false);
-  }
-
+  // A selection cannot outlive the rows it points at.
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void loadUploads();
-    }, 0);
+    queueMicrotask(() => {
+      setSelectedUploadIds((previous) => previous.filter((id) => uploads.some((row) => row.id === id)));
+    });
+  }, [uploads]);
 
-    return () => window.clearTimeout(timer);
-  }, []);
+  const closeImagePreviewRef = useRef(closeImagePreview);
+  useLayoutEffect(() => {
+    closeImagePreviewRef.current = closeImagePreview;
+  });
 
   useEffect(() => {
     if (!previewImage) {
       return;
     }
-    setPreviewZoom(1);
 
     function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        closeImagePreview();
+        closeImagePreviewRef.current();
       }
     }
 
@@ -406,14 +374,17 @@ export default function UppladdningarPage() {
   }, [previewImage]);
 
   useEffect(() => {
-    setLoadedPreviewIds((previous) => {
-      const next: Record<number, boolean> = {};
-      uploads.forEach((upload) => {
-        const alreadyLoaded = previous[upload.id] ?? false;
-        // Keep "loaded" sticky for current list, but only for images with previews.
-        next[upload.id] = upload.preview_url ? alreadyLoaded : true;
+    // Reconciles the sticky "loaded" flags with the current rows. Queued so the update stays
+    // out of the effect body; it is not paint-critical.
+    queueMicrotask(() => {
+      setLoadedPreviewIds((previous) => {
+        const next: Record<number, boolean> = {};
+        uploads.forEach((upload) => {
+          const alreadyLoaded = previous[upload.id] ?? false;
+          next[upload.id] = upload.preview_url ? alreadyLoaded : true;
+        });
+        return next;
       });
-      return next;
     });
   }, [uploads]);
 
@@ -433,7 +404,7 @@ export default function UppladdningarPage() {
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
-      await loadUploads(true);
+      reloadUploads();
     } catch (error) {
       const message = describeError(error, "Ett oväntat fel uppstod under uppladdning.");
       if (message) {

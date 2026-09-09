@@ -4,6 +4,7 @@ import { jsPDF } from "jspdf";
 import { Canvas } from "fabric";
 
 import { renderDocumentToCanvas } from "@/lib/floorplan/fabric/sync";
+import { ApiError, apiFetch } from "@/lib/api-client";
 import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
 import type { FloorplanDocument } from "@/lib/floorplan/types";
 
@@ -40,12 +41,15 @@ async function loadFloorplanDocument(
     imageId: String(imageId),
     imagePath,
   });
-  const response = await fetch(`/api/floorplan-document?${params.toString()}`, {
-    cache: "no-store",
-  });
-
-  if (response.status === 404) {
-    return null;
+  let response: Response;
+  try {
+    response = await apiFetch(`/api/floorplan-document?${params.toString()}`, { cache: "no-store" });
+  } catch (error) {
+    // No saved document is a normal state, not a failure.
+    if (error instanceof ApiError && error.kind === "not-found") {
+      return null;
+    }
+    throw error;
   }
 
   const data = (await response.json()) as {

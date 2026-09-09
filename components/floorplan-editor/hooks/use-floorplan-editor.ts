@@ -38,6 +38,7 @@ import {
   type FloorplanHistoryState,
 } from "@/lib/floorplan/history";
 import { getFurnitureById, getSymbolById } from "@/lib/floorplan/symbol-library";
+import { ApiError, apiFetch } from "@/lib/api-client";
 import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
 import { renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-library";
 import { publishFloorplanImage } from "@/lib/floorplan/publish-floorplan";
@@ -47,7 +48,7 @@ import type { EditorTool, FloorplanDocument, FloorplanObject } from "@/lib/floor
 import { createObjectId } from "@/lib/floorplan/types";
 import type { Canvas, FabricObject } from "fabric";
 import { Path } from "fabric";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 type ApprovedImage = {
   id: number;
@@ -108,8 +109,12 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
   }, [activeTool]);
 
   const document = history?.present ?? null;
-  documentRef.current = document;
-  isDirtyRef.current = isDirty;
+  // Refs mirror the latest render for callbacks that must not close over stale values. They
+  // are written in a layout effect so the write never happens during render.
+  useLayoutEffect(() => {
+    documentRef.current = document;
+    isDirtyRef.current = isDirty;
+  });
   const selectedObject =
     document?.objects.find((object) => object.id === selectedObjectId) ?? null;
 
@@ -138,7 +143,9 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
     commitDocument(nextDocument);
   }, [commitDocument]);
 
-  syncFromCanvasRef.current = syncFromCanvas;
+  useLayoutEffect(() => {
+    syncFromCanvasRef.current = syncFromCanvas;
+  });
 
   const renderCanvas = useCallback(async () => {
     const canvas = canvasRef.current;
@@ -234,17 +241,18 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
           imageId: String(approvedImage.id),
           imagePath: approvedImage.file_path,
         });
-        const response = await fetch(`/api/floorplan-document?${params.toString()}`, {
-          cache: "no-store",
-        });
-        const data = (await response.json()) as {
-          document?: FloorplanDocument;
-          message?: string;
-        };
-
-        let nextDocument = data.document ?? null;
-        if (!response.ok && response.status !== 404) {
-          throw new Error(data.message ?? "Kunde inte ladda planritningen.");
+        let nextDocument: FloorplanDocument | null = null;
+        try {
+          const response = await apiFetch(`/api/floorplan-document?${params.toString()}`, {
+            cache: "no-store",
+          });
+          const data = (await response.json()) as { document?: FloorplanDocument };
+          nextDocument = data.document ?? null;
+        } catch (error) {
+          // No saved document yet is a normal state; anything else is a real failure.
+          if (!(error instanceof ApiError && error.kind === "not-found")) {
+            throw error;
+          }
         }
 
         if (!nextDocument) {
@@ -645,22 +653,15 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
     setIsSaving(true);
     try {
       const latestDocument = syncCanvasToDocument(canvas, document);
-      const response = await fetch("/api/floorplan-document", {
+      await apiFetch("/api/floorplan-document", {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           imageId: approvedImage.id,
           imagePath: approvedImage.file_path,
           document: latestDocument,
         }),
       });
-      const data = (await response.json()) as { message?: string };
-
-      if (!response.ok) {
-        throw new Error(data.message ?? "Kunde inte spara planritningen.");
-      }
 
       documentRef.current = latestDocument;
       setIsDirty(false);
@@ -707,14 +708,7 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
         imageId: String(approvedImage.id),
         imagePath: approvedImage.file_path,
       });
-      const response = await fetch(`/api/floorplan-document?${params.toString()}`, {
-        method: "DELETE",
-      });
-      const data = (await response.json()) as { message?: string };
-
-      if (!response.ok) {
-        throw new Error(data.message ?? "Kunde inte ta bort planritningsdata.");
-      }
+      await apiFetch(`/api/floorplan-document?${params.toString()}`, { method: "DELETE" });
 
       return true;
     } catch (error) {
@@ -724,7 +718,9 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
     }
   }, [approvedImage.file_path, approvedImage.id, onError]);
 
-  saveDocumentRef.current = saveDocument;
+  useLayoutEffect(() => {
+    saveDocumentRef.current = saveDocument;
+  });
 
   useEffect(() => {
     if (!isDirty || isLoading || isSaving || !document || skipPersistRef.current) {
@@ -751,6 +747,8 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
       }
 
       const latestDocument = syncCanvasToDocument(canvas, currentDocument);
+      // Plain fetch on purpose: this fires while the page is being torn down, where the
+      // shared client's sign-out-on-401 redirect would be both useless and disruptive.
       fetch("/api/floorplan-document", {
         method: "PUT",
         keepalive: true,

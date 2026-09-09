@@ -42,11 +42,6 @@ function ToastItem({
   const lastFrameTimeRef = useRef<number | null>(null);
 
   useEffect(() => {
-    remainingMsRef.current = TOAST_DURATION_MS;
-    setProgress(1);
-  }, [toast.id]);
-
-  useEffect(() => {
     if (isHovered) {
       if (animationFrameRef.current !== null) {
         cancelAnimationFrame(animationFrameRef.current);
