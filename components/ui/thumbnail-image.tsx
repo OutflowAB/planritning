@@ -17,7 +17,8 @@ type ThumbnailImageProps = {
   alt: string;
   /** Tailwind height class for the frame, e.g. `h-[220px]`. Must be a fixed height. */
   heightClassName: string;
-  sizes: string;
+  /** Only meaningful for optimised sources; the API serves pre-sized files. */
+  sizes?: string;
   priority?: boolean;
   emptyLabel?: string;
   frameClassName?: string;
@@ -63,6 +64,7 @@ export function ThumbnailImage({
         fill
         sizes={sizes}
         priority={priority}
+        unoptimized
         className={`object-contain transition-opacity duration-200 ${
           isLoaded ? "opacity-100" : "opacity-0"
         }`}

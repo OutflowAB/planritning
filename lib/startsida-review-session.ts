@@ -1,3 +1,5 @@
+import type { ConvertLayout } from "@/lib/floorplan/convert-stream";
+
 export const PENDING_GENERATION_REVIEW_KEY = "startsida-pending-generation-review-v1";
 
 export type PendingGenerationReview = {
@@ -7,7 +9,20 @@ export type PendingGenerationReview = {
   compareBeforePreviewUrl?: string;
   sourcePreviewUrl?: string;
   resultPreviewUrl?: string;
+  /** Where the drawing sits on the canvas, so the before image can be rebuilt to match. */
+  layout?: ConvertLayout;
 };
+
+function isConvertLayout(value: unknown): value is ConvertLayout {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return ["canvasWidth", "canvasHeight", "imageX", "imageY", "imageWidth", "imageHeight"].every(
+    (key) => typeof candidate[key] === "number" && Number.isFinite(candidate[key]),
+  );
+}
 
 export function getPendingGenerationReview(): PendingGenerationReview | null {
   if (typeof window === "undefined") {
@@ -44,6 +59,7 @@ export function getPendingGenerationReview(): PendingGenerationReview | null {
       ...(typeof parsed.resultPreviewUrl === "string" && parsed.resultPreviewUrl.length > 0
         ? { resultPreviewUrl: parsed.resultPreviewUrl }
         : {}),
+      ...(isConvertLayout(parsed.layout) ? { layout: parsed.layout } : {}),
     };
   } catch {
     return null;
@@ -55,7 +71,19 @@ export function setPendingGenerationReview(payload: PendingGenerationReview) {
     return;
   }
 
-  window.sessionStorage.setItem(PENDING_GENERATION_REVIEW_KEY, JSON.stringify(payload));
+  try {
+    window.sessionStorage.setItem(PENDING_GENERATION_REVIEW_KEY, JSON.stringify(payload));
+  } catch {
+    // Over quota. The before preview is the heavy part; drop it and keep the rest, since it
+    // can be rebuilt on restore from the stored layout. Losing the whole review would be worse.
+    const { compareBeforePreviewUrl: _dropped, ...lighter } = payload;
+    void _dropped;
+    try {
+      window.sessionStorage.setItem(PENDING_GENERATION_REVIEW_KEY, JSON.stringify(lighter));
+    } catch {
+      // Nothing more to shed; the review simply is not cached this time.
+    }
+  }
 }
 
 export function clearPendingGenerationReview() {

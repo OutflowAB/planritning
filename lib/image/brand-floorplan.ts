@@ -279,19 +279,60 @@ export async function composeBrandedFloorplan(
 }
 
 /** The white "before" image, aligned pixel for pixel with the branded result. */
+export type BuildCompareBeforeOptions = {
+  /**
+   * Cut the original with the drawing's crop box. Only valid when the drawing *is* the
+   * original — the algorithm path. An AI drawing places and scales the plan freely, so its
+   * box lands somewhere else on the original and lops parts of it off. There the whole
+   * original is fitted into the drawing's slot instead.
+   */
+  cropToDrawing?: boolean;
+};
+
+/** The part of a layout the before image needs. `crop` is only read when cropping. */
+export type CompareSlotLayout = Pick<
+  BrandedFloorplanLayout,
+  "canvasWidth" | "canvasHeight" | "imageX" | "imageY" | "imageWidth" | "imageHeight"
+> & { crop?: CropBoundingBox };
+
 export async function buildCompareBefore(
   orientedColorBuffer: Buffer,
-  layout: BrandedFloorplanLayout,
+  layout: CompareSlotLayout,
+  { cropToDrawing = true }: BuildCompareBeforeOptions = {},
 ): Promise<Buffer> {
-  const croppedOriginalBuffer = await sharp(orientedColorBuffer)
-    .extract({
-      left: layout.crop.left,
-      top: layout.crop.top,
-      width: layout.crop.width,
-      height: layout.crop.height,
-    })
-    .png()
-    .toBuffer();
+  let beforeBuffer: Buffer;
+  let left = layout.imageX;
+  let top = layout.imageY;
+
+  if (cropToDrawing) {
+    if (!layout.crop) {
+      throw new Error("buildCompareBefore: crop box required when cropping to the drawing.");
+    }
+
+    beforeBuffer = await sharp(orientedColorBuffer)
+      .extract({
+        left: layout.crop.left,
+        top: layout.crop.top,
+        width: layout.crop.width,
+        height: layout.crop.height,
+      })
+      .png()
+      .toBuffer();
+  } else {
+    beforeBuffer = await sharp(orientedColorBuffer)
+      .resize({
+        width: layout.imageWidth,
+        height: layout.imageHeight,
+        fit: "inside",
+      })
+      .png()
+      .toBuffer();
+
+    // Centre the fitted original in the slot so it sits where the drawing sits.
+    const fitted = await sharp(beforeBuffer).metadata();
+    left += Math.floor((layout.imageWidth - (fitted.width ?? layout.imageWidth)) / 2);
+    top += Math.floor((layout.imageHeight - (fitted.height ?? layout.imageHeight)) / 2);
+  }
 
   return sharp({
     create: {
@@ -303,9 +344,9 @@ export async function buildCompareBefore(
   })
     .composite([
       {
-        input: croppedOriginalBuffer,
-        left: layout.imageX,
-        top: layout.imageY,
+        input: beforeBuffer,
+        left,
+        top,
       },
     ])
     .png()

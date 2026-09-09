@@ -77,6 +77,8 @@ export type GenerateFloorplanLineArtOptions = {
   sourceHeight: number;
   /** Why a previous attempt on this image was rejected, if there was one. */
   feedback?: string;
+  /** Overrides the configured model. Used to retry a rejected result a different way. */
+  model?: string;
   signal?: AbortSignal;
 };
 
@@ -250,10 +252,11 @@ export async function generateFloorplanLineArt({
   sourceWidth,
   sourceHeight,
   feedback,
+  model: modelOverride,
   signal,
 }: GenerateFloorplanLineArtOptions): Promise<GenerateFloorplanLineArtResult> {
   const client = createClient();
-  const model = process.env.OPENAI_IMAGE_MODEL?.trim() || DEFAULT_MODEL;
+  const model = modelOverride?.trim() || process.env.OPENAI_IMAGE_MODEL?.trim() || DEFAULT_MODEL;
   const quality = (process.env.OPENAI_IMAGE_QUALITY?.trim() || DEFAULT_QUALITY) as
     | "low"
     | "medium"

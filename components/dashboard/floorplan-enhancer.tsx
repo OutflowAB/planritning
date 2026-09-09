@@ -29,7 +29,7 @@ import {
 } from "@/components/dashboard/watermark-overlay";
 import { FloorplanDrawingAnimation } from "@/components/dashboard/floorplan-drawing-animation";
 import { useToast } from "@/components/ui/toast-provider";
-import { readConvertStream } from "@/lib/floorplan/convert-stream";
+import { readConvertStream, type ConvertLayout } from "@/lib/floorplan/convert-stream";
 import {
   imageDisplayName,
   resolveImageDownloadFileName,
@@ -51,7 +51,9 @@ import {
   hasPendingSourceSelection,
   setPendingSourceSelection,
 } from "@/lib/startsida-source-session";
-import { supabase } from "@/lib/supabase";
+import { apiJson } from "@/lib/api-client";
+import { imageUrl } from "@/lib/image-url";
+import type { ImageListItem } from "@/app/api/images/route";
 import {
   buildPlanritningarHref,
   buildVerktygHref,
@@ -59,8 +61,6 @@ import {
 } from "@/lib/verktyg-save-session";
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
-const BUCKET_NAME = "planritningar";
-const UPLOADS_TABLE = "uploaded_images";
 const UPLOADS_PREFIX = "uploads/";
 const GENERATION_EVENTS_EVENT = "generation_events";
 const LEGACY_GENERATION_EVENT = "generation-updated";
@@ -153,7 +153,11 @@ function blobToDataUrl(blob: Blob) {
   });
 }
 
-async function rebuildCompareBeforePreview(sourcePreviewUrl: string, fileName?: string) {
+async function rebuildCompareBeforePreview(
+  sourcePreviewUrl: string,
+  fileName?: string,
+  layout?: ConvertLayout,
+) {
   const sourceResponse = await fetch(sourcePreviewUrl, { cache: "no-store" });
   if (!sourceResponse.ok) {
     return null;
@@ -167,6 +171,12 @@ async function rebuildCompareBeforePreview(sourcePreviewUrl: string, fileName?: 
       type: sourceBlob.type || "image/jpeg",
     }),
   );
+
+  // The slot the result was composed with. Without it the server has to guess a geometry
+  // from the original alone, which never matches an AI drawing.
+  if (layout) {
+    payload.append("layout", JSON.stringify(layout));
+  }
 
   const compareResponse = await fetch("/api/compare-before", {
     method: "POST",
@@ -211,33 +221,40 @@ function clearTransferredSourcePreview() {
 }
 
 async function resolveUploadTransferPayload(uploadId: number): Promise<ConverterTransferPayload | null> {
-  const { data, error } = await supabase
-    .from(UPLOADS_TABLE)
-    .select("id, file_name, file_path, mime_type")
-    .eq("id", uploadId)
-    .like("file_path", `${UPLOADS_PREFIX}%`)
-    .single();
-
-  if (error || !data?.file_path || !data.mime_type?.startsWith("image/")) {
+  try {
+    const { item } = await apiJson<{ item: ImageListItem }>(`/api/images?id=${uploadId}`);
+    if (!item.file_path.startsWith(UPLOADS_PREFIX) || !item.mime_type?.startsWith("image/")) {
+      return null;
+    }
+    return {
+      previewUrl: imageUrl(item.id, "full", item.version),
+      fileName: resolveImageDownloadFileName(item.id, {
+        mimeType: item.mime_type,
+        filePath: item.file_path,
+      }),
+      uploadId: item.id,
+    };
+  } catch {
     return null;
   }
+}
 
-  const { data: signedData, error: signError } = await supabase.storage
-    .from(BUCKET_NAME)
-    .createSignedUrl(data.file_path, 3600);
+/**
+ * Where a generated result can be loaded from, or null when the row is gone. Shaped like the
+ * old signed-URL result so the restore paths below read the same, and a deleted image still
+ * clears the cached review instead of restoring it around a broken picture.
+ */
+type ResultPreviewLink =
+  | { error: null; data: { signedUrl: string } }
+  | { error: Error; data: null };
 
-  if (signError || !signedData?.signedUrl) {
-    return null;
+async function resolveResultPreview(imageId: number): Promise<ResultPreviewLink> {
+  try {
+    const { item } = await apiJson<{ item: ImageListItem }>(`/api/images?id=${imageId}`);
+    return { error: null, data: { signedUrl: imageUrl(item.id, "full", item.version) } };
+  } catch (error) {
+    return { error: error instanceof Error ? error : new Error("Bilden finns inte längre."), data: null };
   }
-
-  return {
-    previewUrl: signedData.signedUrl,
-    fileName: resolveImageDownloadFileName(data.id, {
-      mimeType: data.mime_type,
-      filePath: data.file_path,
-    }),
-    uploadId: data.id,
-  };
 }
 
 function dataUrlToFile(dataUrl: string) {
@@ -677,9 +694,7 @@ export function FloorplanEnhancer() {
           try {
             const [sourcePayload, signedResult] = await Promise.all([
               resolveUploadTransferPayload(pendingReview.sourceImageId),
-              supabase.storage
-                .from(BUCKET_NAME)
-                .createSignedUrl(pendingReview.resultImagePath, 3600),
+              resolveResultPreview(pendingReview.resultImageId),
             ]);
 
             if (isCancelled) {
@@ -746,9 +761,7 @@ export function FloorplanEnhancer() {
       try {
         const [sourcePayload, signedResult] = await Promise.all([
           resolveUploadTransferPayload(pendingReview.sourceImageId),
-          supabase.storage
-            .from(BUCKET_NAME)
-            .createSignedUrl(pendingReview.resultImagePath, 3600),
+          resolveResultPreview(pendingReview.resultImageId),
         ]);
 
         if (isCancelled) {
@@ -778,6 +791,7 @@ export function FloorplanEnhancer() {
           (await rebuildCompareBeforePreview(
             sourcePayload.previewUrl,
             sourcePayload.fileName,
+            pendingReview.layout,
           ));
         setAlignedSourcePreviewUrl(restoredComparePreview);
         if (restoredComparePreview) {
@@ -1063,6 +1077,7 @@ export function FloorplanEnhancer() {
           compareBeforePreviewUrl: compareBeforeDataUrl,
           sourcePreviewUrl: sourcePreviewUrl ?? undefined,
           resultPreviewUrl: nextResultPreviewUrl,
+          layout: conversion.layout,
         });
       }
       window.dispatchEvent(new Event("library-updated"));
@@ -1094,7 +1109,7 @@ export function FloorplanEnhancer() {
 
     const trimmedComment = rejectComment.trim();
     if (action === "reject" && !trimmedComment) {
-      setErrorMessage("Skriv en kommentar om varför bilden nekas.");
+      setErrorMessage("Beskriv vad som ska bli annorlunda innan du konverterar på nytt.");
       return;
     }
 
@@ -1203,7 +1218,7 @@ export function FloorplanEnhancer() {
       // A rejection is a request for another attempt, not the end of the road. The source is
       // kept and converted again straight away, with the comment passed along as a correction.
       clearGenerationResult();
-      showToast("Tack. Gör ett nytt försök på samma bild.");
+      showToast("Konverterar bilden på nytt med din kommentar.");
       window.dispatchEvent(new Event("library-updated"));
       window.dispatchEvent(new Event(GENERATION_EVENTS_EVENT));
       window.dispatchEvent(new Event(LEGACY_GENERATION_EVENT));
@@ -1557,8 +1572,8 @@ export function FloorplanEnhancer() {
               {isCompareReviewReady && alignedSourcePreviewUrl && showRejectForm ? (
                 <div className="space-y-3 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4">
                   <p className="text-sm font-medium text-[#5c544a]">
-                    Berätta vad som blev fel. Vi gör om bilden direkt och tar med din
-                    kommentar till nästa försök.
+                    Beskriv vad som ska bli annorlunda. Kommentaren följer med till den nya
+                    konverteringen, så den behövs för att gå vidare.
                   </p>
                   <textarea
                     value={rejectComment}
@@ -1583,7 +1598,7 @@ export function FloorplanEnhancer() {
                       disabled={isReviewSubmitting || !rejectComment.trim()}
                       className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {isReviewSubmitting ? "Skickar..." : "Neka och gör om"}
+                      {isReviewSubmitting ? "Startar..." : "Starta ny konvertering"}
                     </button>
                   </div>
                 </div>
@@ -1599,8 +1614,8 @@ export function FloorplanEnhancer() {
                       disabled={isReviewSubmitting}
                       className="inline-flex min-w-[157px] items-center justify-center gap-1.5 rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Neka
-                      <X size={14} aria-hidden="true" />
+                      Konvertera på nytt
+                      <RotateCcw size={14} aria-hidden="true" />
                     </button>
                     <button
                       type="button"
@@ -1698,6 +1713,7 @@ export function FloorplanEnhancer() {
                 >
                   <Image
                     src={activePreviewImageUrl}
+                    unoptimized
                     alt={
                       previewImageType === "source"
                         ? "Original planritning i förhandsvisning"

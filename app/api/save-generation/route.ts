@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { requireRole } from "@/lib/server-auth";
+import { getAdminSupabase, serverConfigMissingResponse } from "@/lib/supabase-server";
 
 const UPLOADS_TABLE = "uploaded_images";
 const REVIEWS_TABLE = "generation_reviews";
@@ -10,26 +11,15 @@ type SaveBody = {
   filePath?: string;
 };
 
-function createAdminSupabaseClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseUrl || !serviceRoleKey) {
-    return null;
+export async function POST(request: Request) {
+  const session = await requireRole();
+  if (!session.ok) {
+    return session.response;
   }
 
-  return createClient(supabaseUrl, serviceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
-}
-
-export async function POST(request: Request) {
-  const adminSupabase = createAdminSupabaseClient();
+  const adminSupabase = getAdminSupabase();
   if (!adminSupabase) {
-    return NextResponse.json({ message: "Serverkonfiguration saknas." }, { status: 500 });
+    return serverConfigMissingResponse();
   }
 
   const body = (await request.json()) as SaveBody;

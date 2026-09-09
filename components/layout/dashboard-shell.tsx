@@ -13,8 +13,8 @@ import {
 import { usePathname, useRouter } from "next/navigation";
 import { ComponentType, ReactNode, SVGProps, useCallback, useEffect, useMemo, useState } from "react";
 
+import { apiJson } from "@/lib/api-client";
 import { setAuthenticated } from "@/lib/auth";
-import { supabase } from "@/lib/supabase";
 
 type DashboardShellProps = {
   children: ReactNode;
@@ -125,14 +125,11 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
       1,
     ).toISOString();
 
-    const { count, error } = await supabase
-      .from(UPLOADS_TABLE)
-      .select("id", { count: "exact", head: true })
-      .like("file_path", `${GENERATED_UPLOADS_PREFIX}%`)
-      .gte("created_at", monthStart)
-      .lt("created_at", monthEnd);
-
-    if (error) {
+    let count = 0;
+    try {
+      const params = new URLSearchParams({ kind: "generated", count: "1", from: monthStart, to: monthEnd });
+      ({ count } = await apiJson<{ count: number }>(`/api/images?${params.toString()}`));
+    } catch {
       return;
     }
 

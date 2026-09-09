@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import { createClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 import {
@@ -10,6 +10,8 @@ import {
 } from "@/lib/floorplan/convert-stream";
 import { imageDownloadFileName } from "@/lib/image-naming";
 import { generateFloorplanLineArt, resolveImageEngine } from "@/lib/image/ai-floorplan";
+import { measureStyleDeviation } from "@/lib/image/style-conformance";
+import { isStyleReviewEnabled, reviewStyleAgainstReferences } from "@/lib/image/style-review";
 import {
   buildCompareBefore,
   composeBrandedFloorplan,
@@ -17,6 +19,10 @@ import {
   sampleDominantColor,
   type Rgb,
 } from "@/lib/image/brand-floorplan";
+import { imageUrl } from "@/lib/image-url";
+import { createThumbnail, thumbnailPath } from "@/lib/image/thumbnail";
+import { requireRole } from "@/lib/server-auth";
+import { getAdminSupabase, normaliseEtag } from "@/lib/supabase-server";
 
 const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
@@ -24,34 +30,66 @@ const GENERATION_EVENTS_TABLE = "generation_events";
 const GENERATED_PREFIX = "generated/";
 const UPLOADS_PREFIX = "uploads/";
 
+/**
+ * How far a result may drift from the house style before it is drawn again. The six reference
+ * plans score at most 8% against this measure, so 25% leaves room for legitimate variation
+ * while still catching a grey background, a stray palette or an empty canvas.
+ */
+const DEFAULT_STYLE_DEVIATION_THRESHOLD = 0.25;
+
+/** One retry. A second would double the wait again for diminishing odds. */
+const MAX_STYLE_RETRIES = 1;
+
+/**
+ * The retry is drawn by a different model rather than re-rolling the same one. gpt-image-1.5
+ * also accepts input_fidelity, which gpt-image-2 rejects, so it is a genuinely different route
+ * to the same picture rather than another throw of the dice.
+ */
+const RETRY_IMAGE_MODEL = "gpt-image-1.5";
+
+function resolveRetryModel() {
+  return process.env.OPENAI_IMAGE_RETRY_MODEL?.trim() || RETRY_IMAGE_MODEL;
+}
+
+/**
+ * The vision review needs its own, much higher bar. Measured against the approved reference
+ * plans it returns 10–25% for material we know is correct, and only 35% for a deliberately
+ * greyscaled and blurred one — the bands overlap, and three runs on the same image spread ten
+ * points. Its number cannot carry a 25% gate. Its written observations are still worth having,
+ * so they always join the corrections; the score only forces a redraw when it is unambiguous.
+ */
+const REVIEW_TRIGGER_THRESHOLD = 0.6;
+
+function resolveReviewTrigger() {
+  const configured = Number(process.env.STYLE_REVIEW_TRIGGER);
+  if (Number.isFinite(configured) && configured > 0 && configured <= 1) {
+    return configured;
+  }
+
+  return REVIEW_TRIGGER_THRESHOLD;
+}
+
+function resolveStyleThreshold() {
+  const configured = Number(process.env.STYLE_DEVIATION_THRESHOLD);
+  if (Number.isFinite(configured) && configured > 0 && configured <= 1) {
+    return configured;
+  }
+
+  return DEFAULT_STYLE_DEVIATION_THRESHOLD;
+}
+
 export const runtime = "nodejs";
 
 /** Image generation with reference images can take up to two minutes. */
 export const maxDuration = 300;
 
-function createSupabaseServerClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error("Supabase environment variables are missing.");
-  }
-
-  return createClient(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      persistSession: false,
-      autoRefreshToken: false,
-    },
-  });
-}
-
-async function insertGenerationEvent(supabase: ReturnType<typeof createSupabaseServerClient>) {
+async function insertGenerationEvent(supabase: SupabaseClient) {
   const { error } = await supabase.from(GENERATION_EVENTS_TABLE).insert({});
   return error ?? null;
 }
 
 async function resolveSourceUploadId(
-  supabase: ReturnType<typeof createSupabaseServerClient>,
+  supabase: SupabaseClient,
   uploadedFile: File,
   inputBuffer: Buffer<ArrayBuffer>,
   sourceImageIdValue: FormDataEntryValue | null,
@@ -144,9 +182,24 @@ function toPngDataUrl(buffer: Buffer) {
   return `data:image/png;base64,${buffer.toString("base64")}`;
 }
 
+/**
+ * The before image is a photo on white, which PNG handles badly: at 2560px it came to 6.6 MB
+ * as a data URL, past the ~5 MB sessionStorage quota the review cache lives in. JPEG brings
+ * the same image to about 0.4 MB.
+ */
+async function toJpegDataUrl(buffer: Buffer) {
+  const jpeg = await sharp(buffer).jpeg({ quality: 85 }).toBuffer();
+  return `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+}
+
 class ConvertFailure extends Error {}
 
 export async function POST(request: Request) {
+  const session = await requireRole();
+  if (!session.ok) {
+    return session.response;
+  }
+
   const formData = await request.formData();
   const uploadedFile = formData.get("file");
   const sourceImageIdValue = formData.get("sourceImageId");
@@ -197,9 +250,6 @@ export async function POST(request: Request) {
         }
 
         let drawingBuffer = orientedColorBuffer;
-        // The image the "before" half of the comparison is cut from. It has to match the
-        // drawing pixel for pixel, because both use the same crop box.
-        let compareSourceBuffer = orientedColorBuffer;
         let usedEngine: ConvertEngine = "algorithm";
         // The AI paints the beige itself, so the canvas is padded with the colour it actually
         // produced. Sampling it rather than hardcoding one avoids a visible seam where the
@@ -214,37 +264,106 @@ export async function POST(request: Request) {
               engine: "ai",
             });
 
-            const generated = await generateFloorplanLineArt({
-              sourceImage: orientedColorBuffer,
-              sourceWidth,
-              sourceHeight,
-              feedback,
-              signal: request.signal,
-            });
+            const threshold = resolveStyleThreshold();
+            let best: {
+              buffer: Buffer;
+              background: Rgb;
+              width: number;
+              height: number;
+              deviation: number;
+            } | null = null;
+            let corrections = feedback;
 
-            drawingBuffer = generated.buffer;
-            drawingBackground = await sampleDominantColor(generated.buffer);
-            // The drawing now comes back at the generated resolution, which is usually larger
-            // than the upload. Scale the original up to match so the crop box lands correctly.
-            compareSourceBuffer = await sharp(orientedColorBuffer)
-              .resize({ width: generated.width, height: generated.height, fit: "fill" })
-              .png()
-              .toBuffer();
+            for (let attempt = 0; attempt <= MAX_STYLE_RETRIES; attempt += 1) {
+              const generated = await generateFloorplanLineArt({
+                sourceImage: orientedColorBuffer,
+                sourceWidth,
+                sourceHeight,
+                feedback: corrections,
+                ...(attempt > 0 ? { model: resolveRetryModel() } : {}),
+                signal: request.signal,
+              });
+
+              const background = await sampleDominantColor(generated.buffer);
+              // Measured on the finished page, since that is what anyone compares against the
+              // reference plans.
+              const preview = await composeBrandedFloorplan(generated.buffer, {
+                preserveTones: true,
+                backgroundColor: background,
+              });
+              const measured = await measureStyleDeviation(preview.output);
+
+              // The vision review runs only when it can still change the outcome: a result
+              // already over the threshold is being redrawn regardless.
+              const review =
+                isStyleReviewEnabled() && measured.score <= threshold
+                  ? await reviewStyleAgainstReferences(preview.output, request.signal)
+                  : null;
+
+              const reviewForcesRedraw = Boolean(
+                review && review.score >= resolveReviewTrigger(),
+              );
+              const deviation = {
+                score: reviewForcesRedraw
+                  ? Math.max(measured.score, review?.score ?? 0)
+                  : measured.score,
+                issues: [...measured.issues, ...(review?.issues ?? [])],
+              };
+
+              console.info(
+                `AI floor plan generated ${JSON.stringify({
+                  attempt: attempt + 1,
+                  model: generated.model,
+                  generatedSize: generated.size,
+                  sourceSize: `${sourceWidth}x${sourceHeight}`,
+                  styleReferences: generated.styleReferenceCount,
+                  hasFeedback: Boolean(corrections),
+                  background,
+                  measuredDeviation: Number(measured.score.toFixed(3)),
+                  reviewedDeviation: review ? Number(review.score.toFixed(3)) : null,
+                  reviewForcedRedraw: reviewForcesRedraw,
+                  styleDeviation: Number(deviation.score.toFixed(3)),
+                  styleIssues: deviation.issues.length,
+                  usage: generated.usage,
+                })}`,
+              );
+
+              if (!best || deviation.score < best.deviation) {
+                best = {
+                  buffer: generated.buffer,
+                  background,
+                  width: generated.width,
+                  height: generated.height,
+                  deviation: deviation.score,
+                };
+              }
+
+              const withinStyle = deviation.score <= threshold;
+              if (withinStyle || attempt === MAX_STYLE_RETRIES) {
+                if (!withinStyle) {
+                  console.warn(
+                    `Style deviation still above threshold after retry: ${best.deviation.toFixed(3)} > ${threshold}`,
+                  );
+                }
+                break;
+              }
+
+              // Name what drifted so the next attempt corrects it instead of re-rolling blind.
+              corrections = [feedback, ...deviation.issues].filter(Boolean).join("\n");
+              send({
+                type: "status",
+                message: "Ritar om mot stilmallen",
+                engine: "ai",
+              });
+            }
+
+            if (!best) {
+              throw new Error("Bildmodellen returnerade ingen bild.");
+            }
+
+            drawingBuffer = best.buffer;
+            drawingBackground = best.background;
             usedEngine = "ai";
-
-            // Serialised into the message because Next's dev logger drops extra console args.
-            console.info(
-              `AI floor plan generated ${JSON.stringify({
-                model: generated.model,
-                generatedSize: generated.size,
-                deliveredSize: `${generated.width}x${generated.height}`,
-                sourceSize: `${sourceWidth}x${sourceHeight}`,
-                styleReferences: generated.styleReferenceCount,
-                hasFeedback: Boolean(feedback),
-                background: drawingBackground,
-                usage: generated.usage,
-              })}`,
-            );
           } catch (error) {
             if (request.signal.aborted) {
               throw error;
@@ -269,11 +388,18 @@ export async function POST(request: Request) {
             ? { backgroundColor: drawingBackground }
             : {}),
         });
-        const compareBeforeBuffer = await buildCompareBefore(compareSourceBuffer, branded);
+        // On the AI path the drawing is not the original, so its crop box must not be applied
+        // to the original — the whole upload is fitted into the drawing's slot instead.
+        const compareBeforeBuffer = await buildCompareBefore(orientedColorBuffer, branded, {
+          cropToDrawing: usedEngine !== "ai",
+        });
 
         send({ type: "status", message: "Sparar planritning", engine: usedEngine });
 
-        const supabase = createSupabaseServerClient();
+        const supabase = getAdminSupabase();
+        if (!supabase) {
+          throw new ConvertFailure("Serverkonfiguration saknas.");
+        }
         const { sourceUploadId, sourceUploadError } = await resolveSourceUploadId(
           supabase,
           uploadedFile,
@@ -336,10 +462,24 @@ export async function POST(request: Request) {
           console.error("Failed to store generation event", generationEventError);
         }
 
-        const { data: signedImageData } = await supabase.storage
-          .from(BUCKET_NAME)
-          .createSignedUrl(storagePath, 3600);
-        const savedImageUrl = signedImageData?.signedUrl ?? null;
+        // Version for the stable image URL, and the thumbnail made while the bytes are in hand.
+        let version: string | null = null;
+        try {
+          const { data: listed } = await supabase.storage
+            .from(BUCKET_NAME)
+            .list(GENERATED_PREFIX.replace(/\/$/, ""), { search: uniqueGeneratedName, limit: 1 });
+          version = normaliseEtag((listed?.[0]?.metadata as { eTag?: unknown } | null)?.eTag);
+          await supabase.storage
+            .from(BUCKET_NAME)
+            .upload(
+              thumbnailPath(storagePath, version ?? String(branded.output.byteLength)),
+              await createThumbnail(branded.output),
+              { contentType: "image/webp", upsert: true },
+            );
+        } catch (thumbnailError) {
+          console.error("Thumbnail generation failed after conversion", thumbnailError);
+        }
+        const savedImageUrl = imageUrl(insertedImage.id, "full", version);
 
         send({
           type: "done",
@@ -348,7 +488,7 @@ export async function POST(request: Request) {
           savedImagePath: storagePath,
           savedImageUrl,
           sourceImageId: sourceUploadId,
-          compareBefore: toPngDataUrl(compareBeforeBuffer),
+          compareBefore: await toJpegDataUrl(compareBeforeBuffer),
           // Only pay the base64 cost when the client has no signed URL to load instead.
           result: savedImageUrl ? "" : toPngDataUrl(branded.output),
           layout: {

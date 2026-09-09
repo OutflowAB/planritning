@@ -2,10 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { supabase } from "@/lib/supabase";
+import { apiJson, describeError, isAbortError } from "@/lib/api-client";
 
 const IMAGE_GENERATION_COST_SEK = 50;
-const GENERATED_UPLOADS_PREFIX = "generated/";
 
 type StatCardProps = {
   label: string;
@@ -23,61 +22,51 @@ function StatCard({ label, value, helpText }: StatCardProps) {
   );
 }
 
+type Counts = { generated: number; uploads: number };
+
+async function fetchCounts(signal: AbortSignal): Promise<Counts> {
+  // Independent counts, fetched together.
+  const [generated, uploads] = await Promise.all([
+    apiJson<{ count: number }>("/api/images?kind=generated&count=1", { signal }),
+    apiJson<{ count: number }>("/api/images?kind=uploads&count=1", { signal }),
+  ]);
+  return { generated: generated.count, uploads: uploads.count };
+}
+
 export default function AdminDashboardPage() {
-  const [isLoading, setIsLoading] = useState(true);
+  const [counts, setCounts] = useState<Counts | null>(null);
   const [loadError, setLoadError] = useState("");
-  const [generatedCount, setGeneratedCount] = useState(0);
-  const [uploadCount, setUploadCount] = useState(0);
 
   const estimatedCost = useMemo(
-    () => generatedCount * IMAGE_GENERATION_COST_SEK,
-    [generatedCount],
+    () => (counts?.generated ?? 0) * IMAGE_GENERATION_COST_SEK,
+    [counts],
   );
 
   useEffect(() => {
-    let active = true;
+    const controller = new AbortController();
 
-    async function loadDashboardData() {
-      setLoadError("");
-      setIsLoading(true);
+    fetchCounts(controller.signal)
+      .then((next) => {
+        if (!controller.signal.aborted) {
+          setCounts(next);
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || isAbortError(error)) {
+          return;
+        }
+        setLoadError(describeError(error, "Kunde inte hämta dashboard-data just nu.") ?? "");
+      });
 
-      const [generatedResult, uploadsResult] = await Promise.all([
-        supabase
-          .from("uploaded_images")
-          .select("id", { count: "exact", head: true })
-          .like("file_path", `${GENERATED_UPLOADS_PREFIX}%`),
-        supabase
-          .from("uploaded_images")
-          .select("id", { count: "exact", head: true })
-          .like("file_path", "uploads/%"),
-      ]);
-
-      if (!active) {
-        return;
-      }
-
-      if (generatedResult.error || uploadsResult.error) {
-        setLoadError("Kunde inte hämta dashboard-data just nu.");
-        setIsLoading(false);
-        return;
-      }
-
-      setGeneratedCount(generatedResult.count ?? 0);
-      setUploadCount(uploadsResult.count ?? 0);
-      setIsLoading(false);
-    }
-
-    void loadDashboardData();
-
-    return () => {
-      active = false;
-    };
+    return () => controller.abort();
   }, []);
 
+  const isLoading = counts === null && !loadError;
+
   return (
-    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
+    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-4 py-6 sm:px-6 sm:py-10">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-        <div className="rounded-none border border-[#d8d2c8] bg-white p-6 text-[#3d3a36] shadow-sm md:p-8">
+        <div className="rounded-none border border-[#d8d2c8] bg-white p-4 text-[#3d3a36] shadow-sm sm:p-6 md:p-8">
           <h1 className="text-2xl font-semibold md:text-3xl">Dashboard</h1>
           <p className="mt-2 text-sm text-[#6a6258]">
             Snabb översikt av uppladdningar, genereringar och estimerad kostnad.
@@ -90,20 +79,20 @@ export default function AdminDashboardPage() {
           </p>
         ) : null}
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
           <StatCard
             label="Genererade bilder"
-            value={isLoading ? "..." : String(generatedCount)}
+            value={isLoading ? "–" : String(counts?.generated ?? 0)}
             helpText="Antal bilder i mappen generated/."
           />
           <StatCard
             label="Uppladdade original"
-            value={isLoading ? "..." : String(uploadCount)}
+            value={isLoading ? "–" : String(counts?.uploads ?? 0)}
             helpText="Antal bilder i mappen uploads/."
           />
           <StatCard
             label="Estimerad kostnad"
-            value={isLoading ? "..." : `${estimatedCost} kr`}
+            value={isLoading ? "–" : `${estimatedCost} kr`}
             helpText={`Beräknat med ${IMAGE_GENERATION_COST_SEK} kr per generering.`}
           />
         </div>

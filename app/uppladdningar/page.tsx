@@ -10,20 +10,17 @@ import {
   resolveImageDownloadFileName,
 } from "@/lib/image-naming";
 import { ThumbnailImage } from "@/components/ui/thumbnail-image";
-import { resolvePreviewUrls, withFreshPreviewUrls } from "@/lib/image-preview-cache";
+import { apiFetch, apiJson, describeError } from "@/lib/api-client";
+import { imageUrl } from "@/lib/image-url";
+import { readListCache, writeListCache } from "@/lib/list-cache";
+import type { ImageListItem } from "@/app/api/images/route";
 import {
   hasUnfinishedConverterSession,
   subscribeUnfinishedConverterSession,
 } from "@/lib/startsida-converter-session";
-import { supabase } from "@/lib/supabase";
 import { useToast } from "@/components/ui/toast-provider";
 
-const BUCKET_NAME = "planritningar";
-const UPLOADS_TABLE = "uploaded_images";
-const UPLOADS_PREFIX = "uploads/";
-const PREVIEW_CACHE_KEY = "upload-preview-cache-v1";
-const UPLOADS_LIST_CACHE_KEY = "uploads-list-cache-v1";
-const UPLOADS_LIST_CACHE_TTL_MS = 15 * 60 * 1000;
+const UPLOADS_LIST_CACHE_KEY = "uploads-list-cache-v2";
 const CONVERTER_TRANSFER_KEY = "converter-selected-upload-v1";
 const GENERATION_EVENTS_EVENT = "generation_events";
 const LEGACY_GENERATION_EVENT = "generation-updated";
@@ -38,59 +35,35 @@ type UploadedImageRow = {
   file_size: number;
   mime_type: string | null;
   created_at: string;
-  preview_url?: string | null;
+  version: string | null;
+  preview_url: string | null;
+  full_url: string | null;
 };
 
-type UploadsListCachePayload = {
-  rows: UploadedImageRow[];
-  expiresAt: number;
-};
+function withImageUrls(item: ImageListItem): UploadedImageRow {
+  const isImage = item.mime_type?.startsWith("image/") ?? false;
+  return {
+    id: item.id,
+    file_name: item.file_name,
+    file_path: item.file_path,
+    file_size: item.file_size,
+    mime_type: item.mime_type,
+    created_at: item.created_at,
+    version: item.version,
+    preview_url: isImage ? imageUrl(item.id, "thumb", item.version) : null,
+    full_url: isImage ? imageUrl(item.id, "full", item.version) : null,
+  };
+}
+
+function readUploadsListCache() {
+  return readListCache<UploadedImageRow>(UPLOADS_LIST_CACHE_KEY);
+}
 
 type ConverterTransferPayload = {
   previewUrl: string;
   fileName: string;
   uploadId: number;
 };
-
-function readUploadsListCache() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const rawCache = window.sessionStorage.getItem(UPLOADS_LIST_CACHE_KEY);
-  if (!rawCache) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(rawCache) as UploadsListCachePayload;
-    if (
-      !Array.isArray(parsed?.rows) ||
-      typeof parsed.expiresAt !== "number" ||
-      parsed.expiresAt <= Date.now()
-    ) {
-      window.sessionStorage.removeItem(UPLOADS_LIST_CACHE_KEY);
-      return null;
-    }
-
-    return parsed.rows as UploadedImageRow[];
-  } catch {
-    window.sessionStorage.removeItem(UPLOADS_LIST_CACHE_KEY);
-    return null;
-  }
-}
-
-function writeUploadsListCache(rows: UploadedImageRow[]) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const payload: UploadsListCachePayload = {
-    rows,
-    expiresAt: Date.now() + UPLOADS_LIST_CACHE_TTL_MS,
-  };
-  window.sessionStorage.setItem(UPLOADS_LIST_CACHE_KEY, JSON.stringify(payload));
-}
 
 function useHasUnfinishedConverterSession() {
   return useSyncExternalStore(
@@ -376,52 +349,33 @@ export default function UppladdningarPage() {
 
     const restoredRows = forceRefresh ? null : readUploadsListCache();
     if (restoredRows) {
-      // Paint the cached list immediately, then revalidate below. Returning here instead would
-      // leave rows deleted elsewhere on screen until the cache expires.
-      setUploads(withFreshPreviewUrls(restoredRows, PREVIEW_CACHE_KEY));
+      // Paint the cached list immediately, then revalidate behind it, so rows deleted
+      // elsewhere do not stay on screen until the cache expires.
+      setUploads(restoredRows);
       setIsLoadingUploads(false);
       setIsRefreshingUploads(true);
     } else {
       setIsLoadingUploads(true);
     }
 
-    const { data, error: queryError } = await supabase
-      .from(UPLOADS_TABLE)
-      .select("id, file_name, file_path, file_size, mime_type, created_at")
-      .like("file_path", `${UPLOADS_PREFIX}%`)
-      .order("created_at", { ascending: false });
-
-    if (queryError) {
-      setUploadsLoadFailed(true);
-      showToast(`Kunde inte hämta uppladdningar: ${queryError.message}`, "error");
+    let rows: UploadedImageRow[];
+    try {
+      const { items } = await apiJson<{ items: ImageListItem[] }>("/api/images?kind=uploads");
+      rows = items.map(withImageUrls);
+    } catch (error) {
+      const message = describeError(error, "Kunde inte hämta uppladdningar.");
+      if (message) {
+        setUploadsLoadFailed(true);
+        showToast(message, "error");
+      }
       setIsLoadingUploads(false);
       setIsRefreshingUploads(false);
       return;
     }
 
-    const rows = (data as UploadedImageRow[]) ?? [];
-    const imagePaths = rows
-      .filter((row) => row.mime_type?.startsWith("image/"))
-      .map((row) => row.file_path);
-
-    const previewByPath = await resolvePreviewUrls(
-      supabase,
-      BUCKET_NAME,
-      imagePaths,
-      PREVIEW_CACHE_KEY,
-      { forceRefresh },
-    );
-
-    const rowsWithPreview = rows.map((row) => ({
-      ...row,
-      preview_url: previewByPath.get(row.file_path) ?? null,
-    }));
-
-    setUploads(rowsWithPreview);
-    setSelectedUploadIds((previous) =>
-      previous.filter((id) => rowsWithPreview.some((row) => row.id === id)),
-    );
-    writeUploadsListCache(rowsWithPreview);
+    setUploads(rows);
+    setSelectedUploadIds((previous) => previous.filter((id) => rows.some((row) => row.id === id)));
+    writeListCache(UPLOADS_LIST_CACHE_KEY, rows);
     setIsLoadingUploads(false);
     setIsRefreshingUploads(false);
   }
@@ -470,62 +424,20 @@ export default function UppladdningarPage() {
     setIsUploading(true);
 
     try {
-      const extension = file.name.split(".").pop() ?? "jpg";
-      const uniqueName = `${Date.now()}-${crypto.randomUUID()}.${extension}`;
-      const storagePath = `uploads/${uniqueName}`;
+      const payload = new FormData();
+      payload.append("file", file);
+      await apiFetch("/api/upload", { method: "POST", body: payload });
 
-      const { error: uploadError } = await supabase.storage
-        .from(BUCKET_NAME)
-        .upload(storagePath, file, {
-          upsert: false,
-          contentType: file.type,
-        });
-
-      if (uploadError) {
-        showToast(`Uppladdning misslyckades: ${uploadError.message}`, "error");
-        return;
-      }
-
-      const { data: insertedUpload, error: insertError } = await supabase
-        .from(UPLOADS_TABLE)
-        .insert({
-          file_name: file.name,
-          file_path: storagePath,
-          file_size: file.size,
-          mime_type: file.type || null,
-        })
-        .select("id")
-        .single();
-
-      if (insertError || !insertedUpload?.id) {
-        await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
-        showToast(`Kunde inte spara i databasen: ${insertError?.message ?? "Okänt fel"}`, "error");
-        return;
-      }
-
-      const fileName = resolveImageDownloadFileName(insertedUpload.id, {
-        mimeType: file.type,
-        filePath: storagePath,
-      });
-      const { error: renameError } = await supabase
-        .from(UPLOADS_TABLE)
-        .update({ file_name: fileName })
-        .eq("id", insertedUpload.id);
-
-      if (renameError) {
-        await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
-        await supabase.from(UPLOADS_TABLE).delete().eq("id", insertedUpload.id);
-        showToast(`Kunde inte spara i databasen: ${renameError.message}`, "error");
-        return;
-      }
-
-      showToast("Bilden laddades upp och sparades i databasen.");
+      showToast("Bilden laddades upp.");
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
       await loadUploads(true);
-    } catch {
-      showToast("Ett oväntat fel uppstod under uppladdning.", "error");
+    } catch (error) {
+      const message = describeError(error, "Ett oväntat fel uppstod under uppladdning.");
+      if (message) {
+        showToast(message, "error");
+      }
     } finally {
       setIsUploading(false);
     }
@@ -841,7 +753,7 @@ export default function UppladdningarPage() {
                     style={{ transform: `scale(${previewZoom})`, transformOrigin: "center center" }}
                   >
                     <ThumbnailImage
-                      src={previewImage.preview_url}
+                      src={previewImage.full_url}
                       alt={imageDisplayName(previewImage.id)}
                       heightClassName="h-[45vh] sm:h-[calc(90vh-250px)]"
                       sizes="(max-width: 1024px) 95vw, 80vw"

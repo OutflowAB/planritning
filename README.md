@@ -21,7 +21,15 @@ NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 OPENAI_API_KEY=
+AUTH_SECRET=
 ```
+
+`AUTH_SECRET` signerar sessionskuben. Utelamnas den harleds nyckeln ur service-role-nyckeln,
+vilket fungerar men binder sessionerna till den. Satt en egen slumpstrang i produktion.
+
+Webblasaren talar aldrig direkt med Supabase. All lasning, uppladdning och bildhamtning gar
+via `/api/*`, som kontrollerar sessionen och anvander service-role-nyckeln pa servern.
+Anon-nyckeln behover darfor inga rattigheter alls - se `database/2026-09-09-lock-down-anon.sql`.
 
 `ADMIN_EMAIL`/`ADMIN_PASSWORD` loggar in till vanliga panelen.
 `SUPERADMIN_EMAIL`/`SUPERADMIN_PASSWORD` loggar in till adminpanelen (`/admin/dashboard`).
@@ -49,6 +57,12 @@ Miljovariabler:
 | `OPENAI_IMAGE_MODEL` | `gpt-image-2` | Aven `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini`. |
 | `OPENAI_IMAGE_QUALITY` | `medium` | `low`, `medium`, `high` eller `auto`. Styr kostnad och kvalitet. |
 | `IMAGE_ENGINE` | `ai` nar nyckel finns | Satt till `algorithm` for att tvinga fram den gamla sharp-pipen. |
+| `STYLE_DEVIATION_THRESHOLD` | `0.25` | Hur mycket resultatet far avvika fran stilreferenserna innan det ritas om en gang. |
+
+Efter varje generering matas resultatet mot stilreferenserna av
+`lib/image/style-conformance.ts`: bakgrundsfarg, palett, kantutjamning och blackyta. Avviker
+den mer an troskeln ritas bilden om en gang, med de uppmatta avvikelserna som instruktion.
+Den battre av de tva behalls. En omkorning dubblar bade tiden och kostnaden for den bilden.
 
 Route:n svarar med en handelsestrom (`text/event-stream`) sa att frontend kan visa
 AI:ns delbilder medan genereringen pagar. Misslyckas AI-steget slutfors konverteringen

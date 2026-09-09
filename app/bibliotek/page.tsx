@@ -21,16 +21,14 @@ import {
 } from "@/lib/floorplan/export-library";
 import { ThumbnailImage } from "@/components/ui/thumbnail-image";
 import { imageDisplayName, imageDownloadBaseName } from "@/lib/image-naming";
-import { resolvePreviewUrls, withFreshPreviewUrls } from "@/lib/image-preview-cache";
-import { supabase } from "@/lib/supabase";
+import { apiJson, describeError } from "@/lib/api-client";
+import { imageUrl } from "@/lib/image-url";
+import { prefetchImage } from "@/lib/prefetch-image";
+import { readListCache, writeListCache } from "@/lib/list-cache";
+import type { ImageListItem } from "@/app/api/images/route";
 import { buildVerktygHref, setPendingVerktygSave } from "@/lib/verktyg-save-session";
 
-const BUCKET_NAME = "planritningar";
-const UPLOADS_TABLE = "uploaded_images";
-const GENERATED_PREFIX = "generated/";
-const PREVIEW_CACHE_KEY = "library-preview-cache-v1";
-const LIBRARY_LIST_CACHE_KEY = "library-list-cache-v1";
-const LIBRARY_LIST_CACHE_TTL_MS = 15 * 60 * 1000;
+const LIBRARY_LIST_CACHE_KEY = "library-list-cache-v2";
 const GENERATION_EVENTS_EVENT = "generation_events";
 const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
@@ -50,52 +48,28 @@ type GeneratedImageRow = {
   file_size: number;
   mime_type: string | null;
   created_at: string;
-  preview_url?: string | null;
+  version: string | null;
+  preview_url: string | null;
+  full_url: string | null;
 };
 
-type LibraryListCachePayload = {
-  rows: GeneratedImageRow[];
-  expiresAt: number;
-};
-
-function readLibraryListCache() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const rawCache = window.sessionStorage.getItem(LIBRARY_LIST_CACHE_KEY);
-  if (!rawCache) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(rawCache) as LibraryListCachePayload;
-    if (
-      !Array.isArray(parsed?.rows) ||
-      typeof parsed.expiresAt !== "number" ||
-      parsed.expiresAt <= Date.now()
-    ) {
-      window.sessionStorage.removeItem(LIBRARY_LIST_CACHE_KEY);
-      return null;
-    }
-
-    return parsed.rows as GeneratedImageRow[];
-  } catch {
-    window.sessionStorage.removeItem(LIBRARY_LIST_CACHE_KEY);
-    return null;
-  }
+function withImageUrls(item: ImageListItem): GeneratedImageRow {
+  const isImage = item.mime_type?.startsWith("image/") ?? false;
+  return {
+    id: item.id,
+    file_name: item.file_name,
+    file_path: item.file_path,
+    file_size: item.file_size,
+    mime_type: item.mime_type,
+    created_at: item.created_at,
+    version: item.version,
+    preview_url: isImage ? imageUrl(item.id, "thumb", item.version) : null,
+    full_url: isImage ? imageUrl(item.id, "full", item.version) : null,
+  };
 }
 
-function writeLibraryListCache(rows: GeneratedImageRow[]) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const payload: LibraryListCachePayload = {
-    rows,
-    expiresAt: Date.now() + LIBRARY_LIST_CACHE_TTL_MS,
-  };
-  window.sessionStorage.setItem(LIBRARY_LIST_CACHE_KEY, JSON.stringify(payload));
+function readLibraryListCache() {
+  return readListCache<GeneratedImageRow>(LIBRARY_LIST_CACHE_KEY);
 }
 
 export default function BibliotekPage() {
@@ -411,53 +385,34 @@ export default function BibliotekPage() {
 
     const restoredRows = forceRefresh ? null : readLibraryListCache();
     if (restoredRows) {
-      // Show the cached list straight away, then revalidate below. Without the revalidation
-      // images deleted elsewhere linger here until the cache expires, and their thumbnails
-      // keep rendering from the browser cache even after the rows and files are gone.
-      setImages(withFreshPreviewUrls(restoredRows, PREVIEW_CACHE_KEY));
+      // Paint the cached list straight away and revalidate behind it, so an image deleted
+      // elsewhere disappears instead of lingering until the cache expires.
+      setImages(restoredRows);
       setIsLoading(false);
       setIsRefreshing(true);
     } else {
       setIsLoading(true);
     }
 
-    const { data, error: queryError } = await supabase
-      .from(UPLOADS_TABLE)
-      .select("id, file_name, file_path, file_size, mime_type, created_at, saved_at")
-      .like("file_path", `${GENERATED_PREFIX}%`)
-      .not("saved_at", "is", null)
-      .order("created_at", { ascending: false });
-
-    if (queryError) {
-      setLoadError(`Kunde inte hämta biblioteket: ${queryError.message}`);
+    let rows: GeneratedImageRow[];
+    try {
+      const { items } = await apiJson<{ items: ImageListItem[] }>(
+        "/api/images?kind=generated&saved=1",
+      );
+      rows = items.map(withImageUrls);
+    } catch (error) {
+      const message = describeError(error, "Kunde inte hämta biblioteket.");
+      if (message) {
+        setLoadError(message);
+      }
       setIsLoading(false);
       setIsRefreshing(false);
       return;
     }
 
-    const rows = (data as GeneratedImageRow[]) ?? [];
-    const imagePaths = rows
-      .filter((row) => row.mime_type?.startsWith("image/"))
-      .map((row) => row.file_path);
-
-    const previewByPath = await resolvePreviewUrls(
-      supabase,
-      BUCKET_NAME,
-      imagePaths,
-      PREVIEW_CACHE_KEY,
-      { forceRefresh },
-    );
-
-    const rowsWithPreview = rows.map((row) => ({
-      ...row,
-      preview_url: previewByPath.get(row.file_path) ?? null,
-    }));
-
-    setImages(rowsWithPreview);
-    setSelectedImageIds((previous) =>
-      previous.filter((id) => rowsWithPreview.some((row) => row.id === id)),
-    );
-    writeLibraryListCache(rowsWithPreview);
+    setImages(rows);
+    setSelectedImageIds((previous) => previous.filter((id) => rows.some((row) => row.id === id)));
+    writeListCache(LIBRARY_LIST_CACHE_KEY, rows);
     setIsLoading(false);
     setIsRefreshing(false);
   }
@@ -657,6 +612,7 @@ export default function BibliotekPage() {
                     <ThumbnailImage
                       src={image.preview_url}
                       alt={imageDisplayName(image.id)}
+                      onPrefetch={() => prefetchImage(image.full_url)}
                       heightClassName="h-[220px]"
                       sizes={"(max-width: 768px) 90vw, (max-width: 1280px) 45vw, 30vw"}
                       priority={imageIndex < 3}
@@ -808,7 +764,7 @@ export default function BibliotekPage() {
                     style={{ transform: `scale(${previewZoom})`, transformOrigin: "center center" }}
                   >
                     <ThumbnailImage
-                      src={previewImage.preview_url}
+                      src={previewImage.full_url}
                       alt={imageDisplayName(previewImage.id)}
                       heightClassName="h-[45vh] sm:h-[calc(90vh-190px)]"
                       sizes="(max-width: 1024px) 95vw, 80vw"

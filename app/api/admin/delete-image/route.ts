@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 
 import { deleteUploadRecord } from "@/lib/delete-upload";
-import { createUnauthorizedResponse, getRequestRole } from "@/lib/server-auth";
+import { requireRole } from "@/lib/server-auth";
+import { getAdminSupabase, serverConfigMissingResponse } from "@/lib/supabase-server";
 
 type DeleteBody = {
   id?: number;
@@ -10,17 +10,14 @@ type DeleteBody = {
 };
 
 export async function POST(request: Request) {
-  const role = await getRequestRole();
-  if (!role) {
-    const unauthorized = createUnauthorizedResponse();
-    return NextResponse.json(unauthorized.body, { status: unauthorized.status });
+  const session = await requireRole("admin");
+  if (!session.ok) {
+    return session.response;
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseUrl || !serviceRoleKey) {
-    return NextResponse.json({ message: "Serverkonfiguration saknas." }, { status: 500 });
+  const adminSupabase = getAdminSupabase();
+  if (!adminSupabase) {
+    return serverConfigMissingResponse();
   }
 
   const body = (await request.json()) as DeleteBody;
@@ -31,12 +28,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Ogiltig förfrågan." }, { status: 400 });
   }
 
-  const adminSupabase = createClient(supabaseUrl, serviceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
 
   const result = await deleteUploadRecord(adminSupabase, id, filePath);
   if (!result.ok) {

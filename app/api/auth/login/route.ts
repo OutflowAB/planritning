@@ -1,14 +1,32 @@
 import { NextResponse } from "next/server";
 
 import type { UserRole } from "@/lib/auth";
+import {
+  createSessionCookieValue,
+  credentialsMatch,
+  SESSION_COOKIE_NAME,
+  SESSION_TTL_SECONDS,
+  sessionCookieOptions,
+} from "@/lib/server-auth";
 
 type LoginBody = {
   email?: string;
   password?: string;
 };
 
+function clearedSession(response: NextResponse) {
+  response.cookies.set(SESSION_COOKIE_NAME, "", { ...sessionCookieOptions, maxAge: 0 });
+  return response;
+}
+
 export async function POST(request: Request) {
-  const body = (await request.json()) as LoginBody;
+  let body: LoginBody;
+  try {
+    body = (await request.json()) as LoginBody;
+  } catch {
+    return NextResponse.json({ message: "Ogiltig förfrågan." }, { status: 400 });
+  }
+
   const email = body.email?.trim() ?? "";
   const password = body.password ?? "";
 
@@ -18,50 +36,34 @@ export async function POST(request: Request) {
   const adminPassword = process.env.SUPERADMIN_PASSWORD;
 
   if (!userEmail || !userPassword) {
-    const response = NextResponse.json(
-      { message: "Serverkonfiguration saknas." },
-      { status: 500 },
+    return clearedSession(
+      NextResponse.json({ message: "Serverkonfiguration saknas." }, { status: 500 }),
     );
-    response.cookies.set("sm_auth_role", "", {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: 0,
-    });
-    return response;
   }
 
   let role: UserRole | null = null;
 
-  if (email === adminEmail && password === adminPassword) {
+  if (
+    adminEmail &&
+    adminPassword &&
+    credentialsMatch(email, adminEmail) &&
+    credentialsMatch(password, adminPassword)
+  ) {
     role = "admin";
-  } else if (email === userEmail && password === userPassword) {
+  } else if (credentialsMatch(email, userEmail) && credentialsMatch(password, userPassword)) {
     role = "user";
   }
 
-  if (role) {
-    const response = NextResponse.json({ success: true, role });
-    response.cookies.set("sm_auth_role", role, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 7,
-    });
-    return response;
+  if (!role) {
+    return clearedSession(
+      NextResponse.json({ message: "Fel e-post eller lösenord." }, { status: 401 }),
+    );
   }
 
-  const response = NextResponse.json(
-    { message: "Fel e-post eller lösenord." },
-    { status: 401 },
-  );
-  response.cookies.set("sm_auth_role", "", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 0,
+  const response = NextResponse.json({ success: true, role });
+  response.cookies.set(SESSION_COOKIE_NAME, createSessionCookieValue(role), {
+    ...sessionCookieOptions,
+    maxAge: SESSION_TTL_SECONDS,
   });
   return response;
 }

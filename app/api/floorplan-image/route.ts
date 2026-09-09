@@ -1,31 +1,23 @@
+import { createHash } from "node:crypto";
+
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { requireRole } from "@/lib/server-auth";
+import { getAdminSupabase, serverConfigMissingResponse } from "@/lib/supabase-server";
 
 const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
 const REVIEWS_TABLE = "generation_reviews";
 const GENERATED_PREFIX = "generated/";
 
-function createAdminSupabaseClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseUrl || !serviceRoleKey) {
-    return null;
+export async function GET(request: Request) {
+  const session = await requireRole();
+  if (!session.ok) {
+    return session.response;
   }
 
-  return createClient(supabaseUrl, serviceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
-}
-
-export async function GET(request: Request) {
-  const adminSupabase = createAdminSupabaseClient();
+  const adminSupabase = getAdminSupabase();
   if (!adminSupabase) {
-    return NextResponse.json({ message: "Serverkonfiguration saknas." }, { status: 500 });
+    return serverConfigMissingResponse();
   }
 
   const { searchParams } = new URL(request.url);
@@ -84,11 +76,21 @@ export async function GET(request: Request) {
 
   const buffer = Buffer.from(await fileData.arrayBuffer());
 
-  return new Response(buffer, {
+  // The file at this path is replaced when a plan is republished, so it cannot be immutable.
+  // A strong ETag lets the browser keep it and confirm with a bodyless 304 instead of
+  // downloading the whole file every time the editor opens.
+  const etag = `"${createHash("sha1").update(buffer).digest("hex")}"`;
+  if (request.headers.get("if-none-match") === etag) {
+    return new Response(null, { status: 304, headers: { ETag: etag } });
+  }
+
+  return new Response(new Uint8Array(buffer), {
     status: 200,
     headers: {
       "Content-Type": imageRow.mime_type ?? "image/png",
-      "Cache-Control": "no-store",
+      "Content-Length": String(buffer.byteLength),
+      "Cache-Control": "private, max-age=0, must-revalidate",
+      ETag: etag,
     },
   });
 }

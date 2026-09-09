@@ -1,7 +1,9 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 
 import { FLOORPLAN_DOCUMENT_VERSION, type FloorplanDocument } from "@/lib/floorplan/types";
+import { requireRole } from "@/lib/server-auth";
+import { getAdminSupabase, serverConfigMissingResponse } from "@/lib/supabase-server";
 
 const UPLOADS_TABLE = "uploaded_images";
 const REVIEWS_TABLE = "generation_reviews";
@@ -13,22 +15,6 @@ type SaveBody = {
   imagePath?: string;
   document?: FloorplanDocument;
 };
-
-function createAdminSupabaseClient() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!supabaseUrl || !serviceRoleKey) {
-    return null;
-  }
-
-  return createClient(supabaseUrl, serviceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
-}
 
 function isValidDocument(document: FloorplanDocument | undefined): document is FloorplanDocument {
   if (!document) {
@@ -44,7 +30,7 @@ function isValidDocument(document: FloorplanDocument | undefined): document is F
 }
 
 async function assertApprovedGeneratedImage(
-  adminSupabase: NonNullable<ReturnType<typeof createAdminSupabaseClient>>,
+  adminSupabase: SupabaseClient,
   imageId: number,
   filePath: string,
 ) {
@@ -77,9 +63,14 @@ async function assertApprovedGeneratedImage(
 }
 
 export async function GET(request: Request) {
-  const adminSupabase = createAdminSupabaseClient();
+  const session = await requireRole();
+  if (!session.ok) {
+    return session.response;
+  }
+
+  const adminSupabase = getAdminSupabase();
   if (!adminSupabase) {
-    return NextResponse.json({ message: "Serverkonfiguration saknas." }, { status: 500 });
+    return serverConfigMissingResponse();
   }
 
   const { searchParams } = new URL(request.url);
@@ -118,9 +109,14 @@ export async function GET(request: Request) {
 }
 
 export async function PUT(request: Request) {
-  const adminSupabase = createAdminSupabaseClient();
+  const session = await requireRole();
+  if (!session.ok) {
+    return session.response;
+  }
+
+  const adminSupabase = getAdminSupabase();
   if (!adminSupabase) {
-    return NextResponse.json({ message: "Serverkonfiguration saknas." }, { status: 500 });
+    return serverConfigMissingResponse();
   }
 
   const body = (await request.json()) as SaveBody;
@@ -175,9 +171,14 @@ export async function PUT(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const adminSupabase = createAdminSupabaseClient();
+  const session = await requireRole();
+  if (!session.ok) {
+    return session.response;
+  }
+
+  const adminSupabase = getAdminSupabase();
   if (!adminSupabase) {
-    return NextResponse.json({ message: "Serverkonfiguration saknas." }, { status: 500 });
+    return serverConfigMissingResponse();
   }
 
   const { searchParams } = new URL(request.url);

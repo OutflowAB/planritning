@@ -4,13 +4,11 @@ import { ThumbnailImage } from "@/components/ui/thumbnail-image";
 import { Check, ChevronLeft, ChevronRight, Loader2, Minus, Plus, X } from "lucide-react";
 import { TouchEvent, WheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { supabase } from "@/lib/supabase";
+import { apiJson, describeError } from "@/lib/api-client";
+import { imageUrl } from "@/lib/image-url";
 import { imageDisplayName } from "@/lib/image-naming";
 
 const SEK_PER_GENERATION = 50;
-const BUCKET_NAME = "planritningar";
-const UPLOADS_TABLE = "uploaded_images";
-const GENERATED_PREFIX = "generated/";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
@@ -51,6 +49,7 @@ type GenerationLogRow = {
   file_name: string;
   file_path: string;
   created_at: string;
+  version: string | null;
 };
 
 export default function FaktureringPage() {
@@ -138,23 +137,27 @@ export default function FaktureringPage() {
     setLoadError("");
     setIsLoading(true);
 
-    const { data, error } = await supabase
-      .from(UPLOADS_TABLE)
-      .select("id, file_name, file_path, created_at")
-      .like("file_path", `${GENERATED_PREFIX}%`)
-      .gte("created_at", periodRange.start.toISOString())
-      .lt("created_at", periodRange.end.toISOString())
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      setLoadError(`Kunde inte hämta statistik: ${error.message}`);
+    let logs: GenerationLogRow[];
+    try {
+      const params = new URLSearchParams({
+        kind: "generated",
+        from: periodRange.start.toISOString(),
+        to: periodRange.end.toISOString(),
+        limit: "500",
+      });
+      const { items } = await apiJson<{ items: GenerationLogRow[] }>(`/api/images?${params.toString()}`);
+      logs = items;
+    } catch (error) {
+      const message = describeError(error, "Kunde inte hämta statistik.");
+      if (message) {
+        setLoadError(message);
+      }
       setGenerationCount(0);
       setGenerationLogs([]);
       setIsLoading(false);
       return;
     }
 
-    const logs = (data as GenerationLogRow[]) ?? [];
     setGenerationLogs(logs);
     setGenerationCount(logs.length);
     setIsLoading(false);
@@ -197,23 +200,11 @@ export default function FaktureringPage() {
     return () => document.removeEventListener("keydown", handleEscape);
   }, [previewLog]);
 
-  async function openImagePreview(log: GenerationLogRow) {
+  function openImagePreview(log: GenerationLogRow) {
     setPreviewLog(log);
     setPreviewZoom(1);
-    setPreviewUrl(null);
-    setIsPreviewLoading(true);
-
-    const { data, error } = await supabase.storage
-      .from(BUCKET_NAME)
-      .createSignedUrl(log.file_path, 3600);
-
-    if (error || !data?.signedUrl) {
-      setPreviewLog(null);
-      setIsPreviewLoading(false);
-      return;
-    }
-
-    setPreviewUrl(data.signedUrl);
+    // The URL is known up front now; the image frame shows its own placeholder while it loads.
+    setPreviewUrl(imageUrl(log.id, "full", log.version));
     setIsPreviewLoading(false);
   }
 
