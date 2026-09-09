@@ -288,7 +288,7 @@ export default function FaktureringPage() {
   }
 
   return (
-    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
+    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-4 py-6 sm:px-6 sm:py-10">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
         <div className="rounded-none border border-[#d8d2c8] bg-white p-6 text-[#3d3a36] shadow-sm md:p-8">
         <div className="border-b border-[#e8e2d8] pb-5">
@@ -509,7 +509,7 @@ export default function FaktureringPage() {
                       <ThumbnailImage
                         src={previewUrl}
                         alt={imageDisplayName(previewLog.id)}
-                        heightClassName="h-[calc(90vh-120px)]"
+                        heightClassName="h-[50vh] sm:h-[calc(90vh-120px)]"
                         sizes="(max-width: 1024px) 95vw, 80vw"
                         priority
                       />

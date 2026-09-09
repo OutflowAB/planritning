@@ -546,9 +546,9 @@ export default function BibliotekPage() {
   }, [showDownloadMenu]);
 
   return (
-    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
-      <div className="w-full rounded-none border border-[#d8d2c8] bg-white p-6 shadow-sm">
-        <div className="flex items-start justify-between gap-4">
+    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-4 py-6 sm:px-6 sm:py-10">
+      <div className="w-full rounded-none border border-[#d8d2c8] bg-white p-4 shadow-sm sm:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <h1 className="text-2xl font-semibold text-[#3d3a36]">Planritningar</h1>
           {canDelete ? (
             <div className="flex items-center gap-2">
@@ -613,7 +613,7 @@ export default function BibliotekPage() {
         ) : null}
 
         {!isLoading && !loadError && images.length > 0 ? (
-          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {images.map((image, imageIndex) => {
               const isMarked = selectedImageIds.includes(image.id);
 
@@ -810,7 +810,7 @@ export default function BibliotekPage() {
                     <ThumbnailImage
                       src={previewImage.preview_url}
                       alt={imageDisplayName(previewImage.id)}
-                      heightClassName="h-[calc(90vh-190px)]"
+                      heightClassName="h-[45vh] sm:h-[calc(90vh-190px)]"
                       sizes="(max-width: 1024px) 95vw, 80vw"
                       priority
                     />

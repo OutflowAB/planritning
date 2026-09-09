@@ -113,7 +113,9 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
   const imageGenerationTotalCost = (imageGenerationCount ?? 0) * IMAGE_GENERATION_COST_SEK;
   const sidebarItems = variant === "admin" ? adminSidebarItems : defaultSidebarItems;
   const activeBillingItem = variant === "admin" ? adminBillingItem : billingItem;
-  const mobileNavItems = [...sidebarItems, activeBillingItem] as const;
+  // Fakturering hör hemma i sidomenyn på desktop; på mobil ryms bara det man faktiskt
+  // navigerar mellan, och tre poster får plats utan sidoscroll.
+  const mobileNavItems = sidebarItems;
   const loadGenerationStats = useCallback(async () => {
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
@@ -286,18 +288,6 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
         </aside>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          <section className="border-b border-slate-200 bg-white px-4 py-3 text-slate-700 md:hidden">
-            <h3 className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-              Krediter ({currentMonthLabel})
-            </h3>
-            <p className="mt-2 text-sm">
-              Bildgenereringar: <span className="font-semibold">{imageGenerationCount ?? "–"}</span>
-            </p>
-            <p className="text-sm">
-              Kostnad: <span className="font-semibold">{imageGenerationTotalCost} kr</span>
-            </p>
-          </section>
-
           <main className="flex min-h-0 w-full min-w-0 flex-1 flex-col pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-0">
             {children}
           </main>
@@ -309,7 +299,7 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         aria-label="Mobilnavigering"
       >
-        <div className="flex items-stretch overflow-x-auto px-1 py-1">
+        <div className="flex items-stretch px-1 py-1">
           {mobileNavItems.map((item) => {
             const isActive = isActivePath(item.href);
 
@@ -317,7 +307,7 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
               <Link
                 key={item.href}
                 href={item.href}
-                className={`inline-flex min-w-[88px] flex-1 flex-col items-center justify-center gap-1 rounded-sm px-3 py-2 text-[11px] font-medium transition ${
+                className={`inline-flex flex-1 basis-0 flex-col items-center justify-center gap-1 rounded-sm px-2 py-2 text-center text-[11px] font-medium leading-tight transition ${
                   isActive ? "bg-white/20 text-white" : "text-white/80 hover:bg-white/10 hover:text-white"
                 }`}
               >

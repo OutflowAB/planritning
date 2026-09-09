@@ -205,7 +205,7 @@ export async function POST(request: Request) {
           try {
             send({
               type: "status",
-              message: "AI ritar om planritningen efter stilreferenserna",
+              message: "Ritar om planritningen",
               engine: "ai",
             });
 
@@ -246,7 +246,7 @@ export async function POST(request: Request) {
             console.error("AI generation failed, falling back to the algorithm", error);
             send({
               type: "status",
-              message: "AI-steget misslyckades – slutför med standardalgoritmen",
+              message: "Slutför konverteringen",
               engine: "algorithm",
             });
           }

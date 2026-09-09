@@ -27,6 +27,7 @@ import {
   preventImageContextMenu,
   WatermarkOverlay,
 } from "@/components/dashboard/watermark-overlay";
+import { FloorplanDrawingAnimation } from "@/components/dashboard/floorplan-drawing-animation";
 import { useToast } from "@/components/ui/toast-provider";
 import { readConvertStream } from "@/lib/floorplan/convert-stream";
 import {
@@ -66,173 +67,6 @@ const LEGACY_GENERATION_EVENT = "generation-updated";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
-const PROCESSING_MAX_PROGRESS_PERCENT = 96;
-/** Purely cosmetic cadence for the placeholder step list. It gates nothing. */
-const PROCESSING_STEP_INTERVAL_MS = 2_500;
-const PROCESSING_PROGRESS_TIME_CONSTANT_MS = 35_000;
-const PROCESSING_TERMINAL_DURATION_MS = 15_000;
-const PROCESSING_AI_ENHANCE_DURATION_MS = 5_000;
-const PROCESSING_STEPS = [
-  "Förbehandlar uppladdad bild",
-  "Extraherar väggar och konturer",
-  "Kartlägger rumsindelning",
-  "Optimerar linjer och kontrast",
-  "Exporterar slutresultat",
-] as const;
-const AI_ENHANCING_STEPS = [
-  "AI förbättrar vägglinjer",
-  "AI rensar bakgrundsbrus",
-  "AI skärper rumsindelning",
-  "AI polerar slutresultat",
-] as const;
-
-type TerminalLineType = "cmd" | "ok" | "info" | "warn" | "data";
-
-type TerminalLine = {
-  type: TerminalLineType;
-  text: string;
-};
-
-function buildTerminalSequence(): TerminalLine[][] {
-  const hash = () =>
-    Array.from({ length: 8 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
-  const coord = () => `${Math.floor(Math.random() * 2400)},${Math.floor(Math.random() * 1800)}`;
-  const ms = () => `${(Math.random() * 400 + 12).toFixed(1)}ms`;
-
-  return [
-    [
-      { type: "cmd", text: "> planritning-engine ingest --strict" },
-      { type: "info", text: "[..] mounting buffer 4096×3072 RGBA" },
-      { type: "ok", text: `[ok] decoded tile stream sha1:${hash()}` },
-      { type: "info", text: "[..] EXIF rotate 90° CCW" },
-      { type: "ok", text: `[ok] gamma normalize 2.2 (${ms()})` },
-      { type: "data", text: `    chunks: 64 | vram: 312 MB` },
-    ],
-    [
-      { type: "cmd", text: "> wall_scan --kernel=cuda:0" },
-      { type: "info", text: "[..] launching Hough accumulator grid 128×128" },
-      { type: "ok", text: `[ok] 1,247 edge candidates @ ${coord()}` },
-      { type: "warn", text: `[!!] ghost wall suppressed sector 7 @ ${coord()}` },
-      { type: "ok", text: "[ok] merged 3 duplicate partitions" },
-      { type: "data", text: `    vectors: 89v / 112h | confidence 0.94` },
-    ],
-    [
-      { type: "cmd", text: "> room_graph --build-adjacency" },
-      { type: "info", text: "[..] flood-fill 12 connected components" },
-      { type: "ok", text: `[ok] topology locked id:${hash()}` },
-      { type: "warn", text: "[!!] non-manifold edge @ (891, 412) — patched" },
-      { type: "ok", text: "[ok] 12 rooms classified, 1 excluded (balkong)" },
-      { type: "data", text: `    graph nodes: 12 | edges: 31` },
-    ],
-    [
-      { type: "cmd", text: "> line_pass --iter=4 --sharpen" },
-      { type: "info", text: "[..] morphological open/close pass 1/4" },
-      { type: "ok", text: `[ok] sharpened 2,341 vectors (${ms()})` },
-      { type: "info", text: "[..] contrast stretch LUT applied" },
-      { type: "ok", text: `[ok] noise floor -18dB @ ${coord()}` },
-      { type: "data", text: `    SNR: 34.2 dB | artifacts: 0` },
-    ],
-    [
-      { type: "cmd", text: "> export --format=png --dpi=300" },
-      { type: "info", text: "[..] rasterizing 2480×3508 @ 300dpi" },
-      { type: "ok", text: `[ok] deflate stream id:${hash()}` },
-      { type: "ok", text: `[ok] checksum verified (${ms()})` },
-      { type: "data", text: "    output: 4.1 MB | ready" },
-      { type: "ok", text: "[ok] pipeline complete ✓" },
-    ],
-  ];
-}
-
-function terminalLineClass(type: TerminalLineType) {
-  switch (type) {
-    case "cmd":
-      return "font-medium text-[#4d463f]";
-    case "ok":
-      return "text-[#5c544a]";
-    case "warn":
-      return "text-[#8b6914]";
-    case "data":
-      return "text-[#b8aea0]";
-    default:
-      return "text-[#7b746a]";
-  }
-}
-
-function ProcessingTerminalLog({
-  stepIndex,
-  active,
-}: {
-  stepIndex: number;
-  active: boolean;
-}) {
-  const [lines, setLines] = useState<TerminalLine[]>([]);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const sequencesRef = useRef(buildTerminalSequence());
-  const maxStepRef = useRef(0);
-  const cursorRef = useRef({ step: 0, line: 0 });
-
-  useEffect(() => {
-    maxStepRef.current = Math.max(maxStepRef.current, stepIndex);
-  }, [stepIndex]);
-
-  useEffect(() => {
-    if (!active) {
-      return;
-    }
-
-    const sequences = sequencesRef.current;
-
-    const intervalId = window.setInterval(() => {
-      const cursor = cursorRef.current;
-      const maxStep = maxStepRef.current;
-
-      while (cursor.step <= maxStep) {
-        const stepLines = sequences[cursor.step];
-        if (!stepLines || cursor.line >= stepLines.length) {
-          cursor.step += 1;
-          cursor.line = 0;
-          continue;
-        }
-
-        const nextLine = stepLines[cursor.line];
-        cursor.line += 1;
-        setLines((previous) => [...previous, nextLine].slice(-24));
-        break;
-      }
-    }, 380);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [active]);
-
-  useEffect(() => {
-    const element = scrollRef.current;
-    if (!element) {
-      return;
-    }
-
-    element.scrollTop = element.scrollHeight;
-  }, [lines]);
-
-  return (
-    <div
-      ref={scrollRef}
-      className="h-40 space-y-0.5 overflow-y-auto font-mono text-[11px] leading-relaxed"
-      aria-label="Bearbetningslogg"
-    >
-      {lines.map((line, index) => (
-        <div key={`${line.text}-${index}`} className={terminalLineClass(line.type)}>
-          {line.text}
-        </div>
-      ))}
-      <div className="text-[#5c544a]">
-        <span className="animate-pulse">▊</span>
-      </div>
-    </div>
-  );
-}
-
 type ConverterTransferPayload = {
   previewUrl: string;
   fileName?: string;
@@ -240,107 +74,58 @@ type ConverterTransferPayload = {
 };
 
 type ProcessingViewProps = {
-  stepIndex: number;
   statusMessage?: string | null;
 };
 
-function ProcessingAiEnhancingSteps({ stepIndex }: { stepIndex: number }) {
-  return (
-    <ul className="space-y-2.5">
-      {AI_ENHANCING_STEPS.map((step, index) => {
-        const isComplete = index < stepIndex;
-        const isActive = index === stepIndex;
-
-        return (
-          <li
-            key={step}
-            className={`flex items-center gap-2.5 text-sm transition-colors ${
-              isComplete || isActive ? "text-[#4d463f]" : "text-[#b8aea0]"
-            }`}
-          >
-            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
-              {isComplete ? (
-                <Check size={14} className="text-[#5c544a]" aria-hidden="true" />
-              ) : isActive ? (
-                <Loader2 size={14} className="animate-spin text-[#5c544a]" aria-hidden="true" />
-              ) : (
-                <span className="h-1.5 w-1.5 rounded-full bg-[#d8d2c8]" aria-hidden="true" />
-              )}
-            </span>
-            <span className={isActive ? "font-medium" : undefined}>{step}</span>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function ProcessingView({ stepIndex, statusMessage }: ProcessingViewProps) {
+function ProcessingView({ statusMessage }: ProcessingViewProps) {
   const [elapsedMs, setElapsedMs] = useState(0);
-  const isAiPhase = elapsedMs >= PROCESSING_TERMINAL_DURATION_MS;
-  const aiStepDuration = PROCESSING_AI_ENHANCE_DURATION_MS / AI_ENHANCING_STEPS.length;
-  const aiStepIndex = isAiPhase
-    ? Math.min(
-        AI_ENHANCING_STEPS.length - 1,
-        Math.floor((elapsedMs - PROCESSING_TERMINAL_DURATION_MS) / aiStepDuration),
-      )
-    : 0;
-  // Generation takes anywhere from 30s to 2 minutes, so ease towards — but never reach — 100%.
-  const progressPercent = Math.round(
-    PROCESSING_MAX_PROGRESS_PERCENT * (1 - Math.exp(-elapsedMs / PROCESSING_PROGRESS_TIME_CONSTANT_MS)),
-  );
 
   useEffect(() => {
     const startedAt = Date.now();
     const intervalId = window.setInterval(() => {
       setElapsedMs(Date.now() - startedAt);
-    }, 100);
+    }, 200);
 
     return () => {
       window.clearInterval(intervalId);
     };
   }, []);
 
+  const elapsedSeconds = Math.floor(elapsedMs / 1000);
+
   return (
     <div
       aria-live="polite"
       aria-busy="true"
-      className="flex min-h-[420px] flex-col items-center justify-center gap-8 px-6 py-12"
+      className="relative flex min-h-[440px] flex-col items-center justify-center gap-7 overflow-hidden bg-[#f7f4ef] px-4 py-10 sm:px-6 sm:py-12"
     >
-      <Loader2 className="h-10 w-10 animate-spin text-[#5c544a]" aria-hidden="true" />
+      <style>{`
+        @keyframes sm-proc-glow {
+          0%, 100% { opacity: 0.35; transform: scale(0.95); }
+          50%      { opacity: 0.7;  transform: scale(1.05); }
+        }
+        .sm-proc-glow { animation: sm-proc-glow 4s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .sm-proc-glow { animation: none; }
+        }
+      `}</style>
 
-      <div className="w-full max-w-md space-y-6">
-        <div className="space-y-2 text-center">
-          <p className="text-lg font-semibold text-[#4d463f]">
-            {isAiPhase ? "AI-förbättrar planritning" : "Bearbetar planritning"}
-          </p>
-          <p className="text-sm text-[#7b746a]">
-            {statusMessage
-              ? `${statusMessage}...`
-              : isAiPhase
-                ? `${AI_ENHANCING_STEPS[aiStepIndex]}...`
-                : `${PROCESSING_STEPS[stepIndex]}...`}
-          </p>
-        </div>
+      {/* Mjuk glöd bakom ritningen */}
+      <div
+        className="sm-proc-glow pointer-events-none absolute h-[340px] w-[340px] rounded-full bg-[#e1d5c9] blur-3xl"
+        aria-hidden="true"
+      />
 
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs font-medium text-[#7b746a]">
-            <span>Förlopp</span>
-            <span>{progressPercent}%</span>
-          </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-none bg-[#e8e2d8]">
-            <div
-              className="h-full bg-[#5c544a] transition-all duration-700 ease-out"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-        </div>
+      <div className="relative">
+        <FloorplanDrawingAnimation />
+      </div>
 
-        {isAiPhase ? (
-          <ProcessingAiEnhancingSteps stepIndex={aiStepIndex} />
-        ) : (
-          <ProcessingTerminalLog stepIndex={stepIndex} active />
-        )}
+      <div className="relative space-y-2 text-center">
+        <p className="text-xl font-semibold tracking-tight text-[#3d3a36]">Konverterar bild</p>
+        <p className="text-sm text-[#7b746a]">
+          {statusMessage ? `${statusMessage} · ` : ""}
+          {elapsedSeconds} s
+        </p>
       </div>
     </div>
   );
@@ -738,7 +523,6 @@ export function FloorplanEnhancer() {
   );
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [processingStepIndex, setProcessingStepIndex] = useState(0);
   const [processingStatusMessage, setProcessingStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
   const [resultImageId, setResultImageId] = useState<number | null>(
@@ -823,23 +607,6 @@ export function FloorplanEnhancer() {
       revokeIfObjectUrl(resultPreviewUrl);
     };
   }, [resultPreviewUrl]);
-
-  useEffect(() => {
-    if (!isSubmitting) {
-      setProcessingStepIndex(0);
-      return;
-    }
-
-    const intervalId = window.setInterval(() => {
-      setProcessingStepIndex((previous) =>
-        previous < PROCESSING_STEPS.length - 1 ? previous + 1 : previous,
-      );
-    }, PROCESSING_STEP_INTERVAL_MS);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [isSubmitting]);
 
   function clearGenerationResult() {
     clearPendingGenerationReview();
@@ -1218,7 +985,6 @@ export function FloorplanEnhancer() {
 
     setErrorMessage("");
     setIsSubmitting(true);
-    setProcessingStepIndex(0);
     setProcessingStatusMessage(null);
 
     try {
@@ -1659,7 +1425,7 @@ export function FloorplanEnhancer() {
       />
 
       {isSubmitting ? (
-        <ProcessingView stepIndex={processingStepIndex} statusMessage={processingStatusMessage} />
+        <ProcessingView statusMessage={processingStatusMessage} />
       ) : (
         <>
           {showDropzone ? (

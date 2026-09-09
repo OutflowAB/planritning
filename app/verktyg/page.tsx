@@ -38,7 +38,7 @@ function RedirectToPlanritningar() {
   }, [pathname, router]);
 
   return (
-    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
+    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-4 py-6 sm:px-6 sm:py-10">
       <div className="flex items-center gap-2 text-sm text-[#6a6258]" role="status">
         <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
         Öppnar planritningar...
@@ -220,7 +220,7 @@ function VerktygEditor() {
     }
 
     return (
-      <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
+      <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-4 py-6 sm:px-6 sm:py-10">
         <p className="max-w-lg rounded-none border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {loadError}
         </p>
@@ -274,7 +274,7 @@ function VerktygContent() {
 
   if (isRestoringSession) {
     return (
-      <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
+      <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-4 py-6 sm:px-6 sm:py-10">
         <div className="flex items-center gap-2 text-sm text-[#6a6258]">
           <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
           Hämtar pågående redigering...
@@ -294,7 +294,7 @@ export default function VerktygPage() {
   return (
     <Suspense
       fallback={
-        <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
+        <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-4 py-6 sm:px-6 sm:py-10">
           <div className="flex items-center gap-2 text-sm text-[#6a6258]">
             <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
             Laddar verktyg...

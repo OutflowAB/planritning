@@ -561,9 +561,9 @@ export default function UppladdningarPage() {
   }
 
   return (
-    <section className="relative flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-6 py-10">
+    <section className="relative flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-4 py-6 sm:px-6 sm:py-10">
       <div className="flex w-full max-w-4xl flex-col gap-6">
-        <div className="rounded-none border border-[#d8d2c8] bg-white p-6 shadow-sm">
+        <div className="rounded-none border border-[#d8d2c8] bg-white p-4 shadow-sm sm:p-6">
           <label
             htmlFor="image-file"
             onDrop={handleDrop}
@@ -605,7 +605,7 @@ export default function UppladdningarPage() {
           />
         </div>
 
-        <div className="rounded-none border border-[#d8d2c8] bg-white p-6 shadow-sm">
+        <div className="rounded-none border border-[#d8d2c8] bg-white p-4 shadow-sm sm:p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
               <h1 className="text-2xl font-semibold text-[#3d3a36]">Uppladdningar</h1>
@@ -680,7 +680,7 @@ export default function UppladdningarPage() {
             ) : null}
 
             {!isLoadingUploads && uploads.length > 0 ? (
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {uploads.map((upload, uploadIndex) => {
                 const isPreviewReady = !upload.preview_url || loadedPreviewIds[upload.id];
                 const isMarked = selectedUploadIds.includes(upload.id);
@@ -843,7 +843,7 @@ export default function UppladdningarPage() {
                     <ThumbnailImage
                       src={previewImage.preview_url}
                       alt={imageDisplayName(previewImage.id)}
-                      heightClassName="h-[calc(90vh-250px)]"
+                      heightClassName="h-[45vh] sm:h-[calc(90vh-250px)]"
                       sizes="(max-width: 1024px) 95vw, 80vw"
                       priority
                     />
