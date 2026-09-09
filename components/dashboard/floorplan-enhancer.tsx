@@ -978,7 +978,7 @@ export function FloorplanEnhancer() {
     setIsDragActive(false);
   }
 
-  async function processImage(file?: File) {
+  async function processImage(file?: File, feedback?: string) {
     if (isSubmitting) {
       return;
     }
@@ -1008,6 +1008,11 @@ export function FloorplanEnhancer() {
       payload.append("file", resolvedFile);
       if (sourceImageId) {
         payload.append("sourceImageId", String(sourceImageId));
+      }
+      // Why the previous attempt was rejected. Sent along so the next version can correct it
+      // rather than being a blind re-roll.
+      if (feedback) {
+        payload.append("feedback", feedback);
       }
 
       const response = await fetch("/api/convert", {
@@ -1195,11 +1200,16 @@ export function FloorplanEnhancer() {
         return;
       }
 
-      resetSourceSelection();
-      showToast("Ditt meddelande är skickat.");
+      // A rejection is a request for another attempt, not the end of the road. The source is
+      // kept and converted again straight away, with the comment passed along as a correction.
+      clearGenerationResult();
+      showToast("Tack. Gör ett nytt försök på samma bild.");
       window.dispatchEvent(new Event("library-updated"));
       window.dispatchEvent(new Event(GENERATION_EVENTS_EVENT));
       window.dispatchEvent(new Event(LEGACY_GENERATION_EVENT));
+      setIsReviewSubmitting(false);
+      void processImage(undefined, trimmedComment);
+      return;
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
     } finally {
@@ -1547,7 +1557,8 @@ export function FloorplanEnhancer() {
               {isCompareReviewReady && alignedSourcePreviewUrl && showRejectForm ? (
                 <div className="space-y-3 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4">
                   <p className="text-sm font-medium text-[#5c544a]">
-                    Berätta varför bilden nekas så att vi kan förbättra resultatet.
+                    Berätta vad som blev fel. Vi gör om bilden direkt och tar med din
+                    kommentar till nästa försök.
                   </p>
                   <textarea
                     value={rejectComment}
@@ -1572,7 +1583,7 @@ export function FloorplanEnhancer() {
                       disabled={isReviewSubmitting || !rejectComment.trim()}
                       className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {isReviewSubmitting ? "Skickar..." : "Skicka"}
+                      {isReviewSubmitting ? "Skickar..." : "Neka och gör om"}
                     </button>
                   </div>
                 </div>

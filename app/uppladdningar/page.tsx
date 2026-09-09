@@ -829,7 +829,7 @@ export default function UppladdningarPage() {
             <div className="relative flex-1 overflow-auto bg-[#f0ece6] p-4">
               <div className="mx-auto flex min-h-full w-full items-center justify-center">
                 <div
-                  className="touch-none select-none"
+                  className="w-full touch-none select-none"
                   onTouchStart={handlePreviewTouchStart}
                   onTouchMove={handlePreviewTouchMove}
                   onTouchEnd={handlePreviewTouchEnd}

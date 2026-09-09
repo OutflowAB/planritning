@@ -150,6 +150,11 @@ export async function POST(request: Request) {
   const formData = await request.formData();
   const uploadedFile = formData.get("file");
   const sourceImageIdValue = formData.get("sourceImageId");
+  const feedbackValue = formData.get("feedback");
+  const feedback =
+    typeof feedbackValue === "string" && feedbackValue.trim().length > 0
+      ? feedbackValue.trim().slice(0, 1000)
+      : undefined;
 
   if (!(uploadedFile instanceof File)) {
     return NextResponse.json({ message: "Ingen bildfil skickades." }, { status: 400 });
@@ -213,6 +218,7 @@ export async function POST(request: Request) {
               sourceImage: orientedColorBuffer,
               sourceWidth,
               sourceHeight,
+              feedback,
               signal: request.signal,
             });
 
@@ -234,6 +240,7 @@ export async function POST(request: Request) {
                 deliveredSize: `${generated.width}x${generated.height}`,
                 sourceSize: `${sourceWidth}x${sourceHeight}`,
                 styleReferences: generated.styleReferenceCount,
+                hasFeedback: Boolean(feedback),
                 background: drawingBackground,
                 usage: generated.usage,
               })}`,

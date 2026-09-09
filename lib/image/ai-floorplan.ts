@@ -75,6 +75,8 @@ export type GenerateFloorplanLineArtOptions = {
   sourceImage: Buffer;
   sourceWidth: number;
   sourceHeight: number;
+  /** Why a previous attempt on this image was rejected, if there was one. */
+  feedback?: string;
   signal?: AbortSignal;
 };
 
@@ -247,6 +249,7 @@ export async function generateFloorplanLineArt({
   sourceImage,
   sourceWidth,
   sourceHeight,
+  feedback,
   signal,
 }: GenerateFloorplanLineArtOptions): Promise<GenerateFloorplanLineArtResult> {
   const client = createClient();
@@ -273,7 +276,13 @@ export async function generateFloorplanLineArt({
     )),
   ];
 
-  const prompt = styleReferences.length > 0 ? `${styleRules}${STYLE_REFERENCE_PROMPT}` : styleRules;
+  const basePrompt =
+    styleReferences.length > 0 ? `${styleRules}${STYLE_REFERENCE_PROMPT}` : styleRules;
+
+  // Placed last so it reads as a correction to everything above it.
+  const prompt = feedback
+    ? `${basePrompt}\n\nEtt tidigare försök på den här planritningen nekades med följande motivering. Rätta det den här gången, utan att bryta mot reglerna ovan:\n${feedback}`
+    : basePrompt;
 
   // Returned at the size the model drew it. Scaling it down to the upload's dimensions would
   // throw away exactly the resolution that was paid for — a 640px photo would cap a 2048px

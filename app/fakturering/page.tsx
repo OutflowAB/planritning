@@ -495,7 +495,7 @@ export default function FaktureringPage() {
                   <Loader2 size={28} className="animate-spin text-[#7b746a]" aria-hidden="true" />
                 ) : (
                   <div
-                    className="touch-none select-none"
+                    className="w-full touch-none select-none"
                     onTouchStart={handlePreviewTouchStart}
                     onTouchMove={handlePreviewTouchMove}
                     onTouchEnd={handlePreviewTouchEnd}
