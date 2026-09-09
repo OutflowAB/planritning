@@ -101,7 +101,25 @@ export async function deleteUploadRecord(
     return { ok: false, message: "Bilden hittades inte eller är redan borttagen." };
   }
 
-  const { error: storageError } = await supabase.storage.from("planritningar").remove(storagePaths);
+  // Thumbnails are derivatives keyed by the source name plus a version tag, so they are found
+  // by prefix rather than by an exact path.
+  const thumbnailPaths: string[] = [];
+  for (const sourcePath of storagePaths) {
+    const baseName = sourcePath.split("/").pop()?.replace(/\.[^.]+$/, "");
+    if (!baseName) continue;
+    const { data: thumbs } = await supabase.storage
+      .from("planritningar")
+      .list("thumbs", { search: baseName, limit: 100 });
+    for (const thumb of thumbs ?? []) {
+      if (thumb.name.startsWith(`${baseName}-`)) {
+        thumbnailPaths.push(`thumbs/${thumb.name}`);
+      }
+    }
+  }
+
+  const { error: storageError } = await supabase.storage
+    .from("planritningar")
+    .remove([...storagePaths, ...thumbnailPaths]);
   if (storageError) {
     return {
       ok: false,

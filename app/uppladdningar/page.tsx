@@ -12,6 +12,7 @@ import {
 import { ThumbnailImage } from "@/components/ui/thumbnail-image";
 import { apiFetch, apiJson, describeError } from "@/lib/api-client";
 import { imageUrl } from "@/lib/image-url";
+import { prefetchImage } from "@/lib/prefetch-image";
 import { readListCache, writeListCache } from "@/lib/list-cache";
 import type { ImageListItem } from "@/app/api/images/route";
 import {
@@ -650,6 +651,7 @@ export default function UppladdningarPage() {
                       <ThumbnailImage
                         src={upload.preview_url}
                         alt={imageDisplayName(upload.id)}
+                        onPrefetch={() => prefetchImage(upload.full_url)}
                         heightClassName="h-[220px]"
                         sizes={"(max-width: 768px) 90vw, (max-width: 1280px) 45vw, 30vw"}
                         priority={uploadIndex < 3}

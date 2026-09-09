@@ -23,6 +23,8 @@ type ThumbnailImageProps = {
   emptyLabel?: string;
   frameClassName?: string;
   onLoad?: () => void;
+  /** Fires on hover or focus — the moment to warm the image the user is about to open. */
+  onPrefetch?: () => void;
 };
 
 export function ThumbnailImage({
@@ -34,6 +36,7 @@ export function ThumbnailImage({
   emptyLabel = "Ingen bildförhandsvisning",
   frameClassName = "border border-[#d8d2c8] bg-white",
   onLoad,
+  onPrefetch,
 }: ThumbnailImageProps) {
   const [isLoaded, setIsLoaded] = useState(false);
 
@@ -50,6 +53,8 @@ export function ThumbnailImage({
   return (
     <div
       className={`relative ${heightClassName} w-full overflow-hidden rounded-none ${frameClassName}`}
+      onMouseEnter={onPrefetch}
+      onFocus={onPrefetch}
     >
       {isLoaded ? null : (
         <div

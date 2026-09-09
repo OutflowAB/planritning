@@ -26,7 +26,6 @@ import { getAdminSupabase, normaliseEtag } from "@/lib/supabase-server";
 
 const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
-const GENERATION_EVENTS_TABLE = "generation_events";
 const GENERATED_PREFIX = "generated/";
 const UPLOADS_PREFIX = "uploads/";
 
@@ -82,11 +81,6 @@ export const runtime = "nodejs";
 
 /** Image generation with reference images can take up to two minutes. */
 export const maxDuration = 300;
-
-async function insertGenerationEvent(supabase: SupabaseClient) {
-  const { error } = await supabase.from(GENERATION_EVENTS_TABLE).insert({});
-  return error ?? null;
-}
 
 async function resolveSourceUploadId(
   supabase: SupabaseClient,
@@ -275,6 +269,7 @@ export async function POST(request: Request) {
             let corrections = feedback;
 
             for (let attempt = 0; attempt <= MAX_STYLE_RETRIES; attempt += 1) {
+              const generationStartedAt = Date.now();
               const generated = await generateFloorplanLineArt({
                 sourceImage: orientedColorBuffer,
                 sourceWidth,
@@ -314,6 +309,8 @@ export async function POST(request: Request) {
                 `AI floor plan generated ${JSON.stringify({
                   attempt: attempt + 1,
                   model: generated.model,
+                  quality: generated.quality,
+                  durationMs: Date.now() - generationStartedAt,
                   generatedSize: generated.size,
                   sourceSize: `${sourceWidth}x${sourceHeight}`,
                   styleReferences: generated.styleReferenceCount,
@@ -369,7 +366,12 @@ export async function POST(request: Request) {
               throw error;
             }
 
-            console.error("AI generation failed, falling back to the algorithm", error);
+            console.error(
+              `AI generation failed, falling back to the algorithm ${JSON.stringify({
+                reason: error instanceof Error ? error.message : String(error),
+                sourceSize: `${sourceWidth}x${sourceHeight}`,
+              })}`,
+            );
             send({
               type: "status",
               message: "Slutför konverteringen",
@@ -454,12 +456,6 @@ export async function POST(request: Request) {
           await supabase.storage.from(BUCKET_NAME).remove([storagePath]);
           console.error("Failed to rename generated image metadata", generatedRenameError);
           throw new ConvertFailure("Kunde inte spara bildens metadata.");
-        }
-
-        const generationEventError = await insertGenerationEvent(supabase);
-        if (generationEventError) {
-          // Keep conversion successful even if event logging fails.
-          console.error("Failed to store generation event", generationEventError);
         }
 
         // Version for the stable image URL, and the thumbnail made while the bytes are in hand.

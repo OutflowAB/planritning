@@ -1713,7 +1713,6 @@ export function FloorplanEnhancer() {
                 >
                   <Image
                     src={activePreviewImageUrl}
-                    unoptimized
                     alt={
                       previewImageType === "source"
                         ? "Original planritning i förhandsvisning"

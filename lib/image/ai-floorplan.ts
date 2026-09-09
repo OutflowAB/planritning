@@ -88,6 +88,7 @@ export type GenerateFloorplanLineArtResult = {
   width: number;
   height: number;
   model: string;
+  quality: string;
   size: string;
   styleReferenceCount: number;
   usage: AiFloorplanUsage | null;
@@ -333,6 +334,7 @@ export async function generateFloorplanLineArt({
     width: generatedSize.width,
     height: generatedSize.height,
     model,
+    quality,
     size,
     styleReferenceCount: styleReferences.length,
     usage,
