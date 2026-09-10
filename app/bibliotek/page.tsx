@@ -232,7 +232,7 @@ export default function BibliotekPage() {
         imagePath: previewImage.file_path,
         fileName: imageDownloadBaseName(previewImage.id),
         format,
-        fallbackUrl: previewImage.preview_url,
+        fallbackUrl: previewImage.full_url,
       });
       setShowDownloadMenu(false);
     } catch {

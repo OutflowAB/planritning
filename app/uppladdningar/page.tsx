@@ -127,9 +127,9 @@ export default function UppladdningarPage() {
       return;
     }
 
-    if (upload.preview_url) {
+    if (upload.full_url) {
       const payload: ConverterTransferPayload = {
-        previewUrl: upload.preview_url,
+        previewUrl: upload.full_url,
         fileName: resolveImageDownloadFileName(upload.id, {
           mimeType: upload.mime_type,
           filePath: upload.file_path,
@@ -218,13 +218,13 @@ export default function UppladdningarPage() {
   }
 
   async function downloadPreviewImage() {
-    if (!previewImage?.preview_url) {
+    if (!previewImage?.full_url) {
       return;
     }
 
     setIsPreviewDownloading(true);
     try {
-      const response = await fetch(previewImage.preview_url, { cache: "no-store" });
+      const response = await fetch(previewImage.full_url, { cache: "no-store" });
       if (!response.ok) {
         throw new Error("Download failed");
       }
