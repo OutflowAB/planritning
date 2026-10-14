@@ -68,6 +68,35 @@ Route:n svarar med en handelsestrom (`text/event-stream`) sa att frontend kan vi
 AI:ns delbilder medan genereringen pagar. Misslyckas AI-steget slutfors konverteringen
 med den gamla algoritmen i stallet for att fela.
 
+## Planritning fran Polycam-lank
+
+Pa startsidan kan man i stallet for en bildfil klistra in en lank till en Polycam-skanning
+(`https://poly.cam/capture/{id}`). `/api/convert-polycam` hamtar skanningens vaggdata
+(`optimized_roomplan.json`, Apples RoomPlan-format), ritar upp en rak planritning i ratt
+skala (svarta vaggar, gap for dorrar och oppningar, vita rutor for fonster, ingen text) och
+skickar den genom samma AI-steg, ram, sparning och granskning som en uppladdad bild. Den
+uppritade planen sparas som originalbild, sa jamforelsereglaget, "neka och rita om" och
+radering fungerar som vanligt. En omritning hamtar inte fran Polycam igen.
+
+Begransningar:
+
+- Fungerar bara for skanningar gjorda med LiDAR i Polycams rums- eller planritningslage
+  (Space/Floorplan). Andra skanningar saknar planritningsdata och ger ett tydligt fel.
+- Skanningen maste vara delad som publik lank. Privata lankar ger felet "privat eller
+  felaktig".
+- Bara den forsta vaningen ritas om skanningen har flera.
+- Rumsnamn, inredning och entrepil kommer inte fran skanningen och ritas inte; de laggs till
+  i editorn. Saknar skanningen en vagg saknas den aven i planen.
+- Polycam har inget publikt API. Hamtningen anvander samma odokumenterade adress som
+  Polycams egen delningssida och kan sluta fungera utan forvarning; da far anvandaren ett
+  felmeddelande och bilduppladdningen fungerar som vanligt. Servern hamtar aldrig den
+  inklistrade texten, bara en adress den bygger sjalv fran skanningens id, och foljer bara
+  en omdirigering till Polycams lagring. Skanningens GPS-position (`latLonAlt`) lases aldrig.
+
+Lanken sparas i kolumnen `uploaded_images.source_url` nar migrationen
+`database/2026-10-14-uploaded-images-source-url.sql` ar kord. Innan dess fungerar allt som
+vanligt, lanken sparas bara inte (en varning loggas).
+
 ## Databasuppdatering (kravs for koppling mellan original och generering)
 
 Kor SQL-filen `database/2026-04-23-generation-source-link.sql` i Supabase SQL Editor.
@@ -82,6 +111,6 @@ sa genereringsrader tas bort nar originalbilden tas bort.
   befintliga sessioner ut en gang - det ar avsett.
 - Nar den versionen ar deployad: kor `database/2026-09-09-lock-down-anon.sql` i Supabase SQL
   Editor sa att den publika anon-nyckeln inte langre kan lasa eller skriva nagot.
-- `/api/convert` har `maxDuration = 300`. Kontrollera att Vercel-planen tillater sa langa
+- `/api/convert` och `/api/convert-polycam` har `maxDuration = 300`. Kontrollera att Vercel-planen tillater sa langa
   funktionsanrop, annars kapas langa genereringar.
 - Supabase anvands for lagring och data, inte for autentisering; inloggning sker med de konfigurerade kontona ovan.
