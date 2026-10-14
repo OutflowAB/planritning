@@ -1,8 +1,8 @@
 import sharp from "sharp";
 
+import { chooseDoorSwings, sectorPath, type SwingChoice } from "@/lib/polycam/door-swing";
 import { PolycamError } from "@/lib/polycam/fetch-roomplan";
 import type {
-  DoorSwing,
   PlanAlignment,
   PlanElement,
   PlanOpening,
@@ -167,7 +167,7 @@ function outsideSide(wall: DrawnWall, rooms: Vec[][]): -1 | 0 | 1 {
 }
 
 /** The wall's rectangle, reaching past each end by its own extension. */
-function wallOutline(wall: DrawnWall): Vec[] {
+export function wallOutline(wall: DrawnWall): Vec[] {
   const centre = add(wall.centre, wall.along, (wall.extendEnd - wall.extendStart) / 2);
   return rectangle(centre, wall.along, wall.length + wall.extendStart + wall.extendEnd, wall.thickness);
 }
@@ -216,28 +216,6 @@ function closeExteriorCorners(walls: DrawnWall[]) {
   }
 }
 
-/**
- * Leaf and quarter arc of a door. RoomPlan names the hinge side and the face the leaf swings
- * to, but documents neither convention; doors without the field get the same default. A wrong
- * swing is a small, editable defect, and the arc is what tells the model "door" rather than
- * "opening".
- */
-function doorSwingPath(centre: Vec, along: Vec, length: number, swing: DoorSwing | null): Vec[] {
-  const resolved = swing ?? "left_p1";
-  const hingeSign = resolved.startsWith("left") ? -1 : 1;
-  const faceSign = resolved.endsWith("p2") ? -1 : 1;
-  const hinge = add(centre, along, (hingeSign * length) / 2);
-  const normal = normalOf(along);
-  const open = { x: normal.x * faceSign, z: normal.z * faceSign };
-  const closed = { x: -along.x * hingeSign, z: -along.z * hingeSign };
-  const path: Vec[] = [hinge];
-  for (let step = 0; step <= 24; step += 1) {
-    const angle = (step / 24) * (Math.PI / 2);
-    path.push(add(add(hinge, open, Math.cos(angle) * length), closed, Math.sin(angle) * length));
-  }
-  return path;
-}
-
 function pickStory(model: RoomplanModel) {
   const stories = [...new Set(model.walls.map((wall) => wall.story))].sort((a, b) => a - b);
   return { story: stories[0] ?? 0, storyCount: stories.length };
@@ -247,7 +225,11 @@ function noWalls(): never {
   throw new PolycamError("missing", "Skanningen innehåller inga väggar som går att rita.");
 }
 
-export async function renderPlan(model: RoomplanModel): Promise<RenderedPlan> {
+/**
+ * Everything the drawing is made of, in plan coordinates. Split from the SVG step so the door
+ * swings can be checked against the walls without rasterising anything.
+ */
+export function preparePlan(model: RoomplanModel) {
   const { story, storyCount } = pickStory(model);
   const align = aligner(model.alignment);
   const onStory = <T extends PlanElement | PlanRoom>(item: T) => item.story === story;
@@ -314,15 +296,36 @@ export async function renderPlan(model: RoomplanModel): Promise<RenderedPlan> {
       along,
       length: opening.length,
       wallThickness: parent?.thickness ?? widestWall,
-      swingPath: opening.kind === "door" ? doorSwingPath(centre, along, opening.length, opening.swing) : null,
+      parentWallId: opening.parentWallId,
+      swingHint: opening.swing,
+      swing: null as SwingChoice | null,
     };
   });
+
+  // Doors are placed against the finished walls, after thickening, since a swing has to clear
+  // the walls as drawn rather than as scanned.
+  const doors = openings.filter((opening) => opening.kind === "door");
+  const choices = chooseDoorSwings(
+    doors.map((door) => ({ ...door, hint: door.swingHint })),
+    walls.map((wall) => ({ id: wall.id, outline: wallOutline(wall) })),
+    rooms,
+  );
+  doors.forEach((door, index) => {
+    door.swing = choices[index];
+  });
+
+  return { story, storyCount, droppedShortWalls: candidateWalls.length - keptWalls.length, walls, openings, rooms };
+}
+
+export async function renderPlan(model: RoomplanModel): Promise<RenderedPlan> {
+  const { story, storyCount, droppedShortWalls, walls, openings } = preparePlan(model);
+
 
   // Fit the drawing: the bounding box of everything drawn, including the door swings.
   const outline: Vec[] = walls.flatMap(wallOutline);
   for (const opening of openings) {
     outline.push(...rectangle(opening.centre, opening.along, opening.length, opening.wallThickness));
-    outline.push(...(opening.swingPath ?? []));
+    if (opening.swing) outline.push(...sectorPath(opening.swing.sector));
   }
 
   const minX = Math.min(...outline.map((p) => p.x));
@@ -370,9 +373,9 @@ export async function renderPlan(model: RoomplanModel): Promise<RenderedPlan> {
           `fill="${WHITE}" stroke="${BLACK}" stroke-width="${thinLine}"`,
         ),
       );
-    } else if (opening.swingPath) {
+    } else if (opening.swing) {
       parts.push(
-        `<polyline points="${opening.swingPath.map(toPx).join(" ")}" fill="none" stroke="${BLACK}" stroke-width="${thinLine}" stroke-linejoin="round"/>`,
+        `<polyline points="${sectorPath(opening.swing.sector).map(toPx).join(" ")}" fill="none" stroke="${BLACK}" stroke-width="${thinLine}" stroke-linejoin="round"/>`,
       );
     }
   }
@@ -391,6 +394,6 @@ export async function renderPlan(model: RoomplanModel): Promise<RenderedPlan> {
     storyCount,
     wallCount: walls.length,
     exteriorWallCount: walls.filter((wall) => wall.exterior).length,
-    droppedShortWalls: candidateWalls.length - keptWalls.length,
+    droppedShortWalls,
   };
 }
