@@ -146,6 +146,8 @@ describe("POST /api/convert", () => {
     expect(generated?.file_name).toBe(`bild-${done.savedImageId}.png`);
     expect(mocks.generate).toHaveBeenCalledTimes(1);
     expect(mocks.generate.mock.calls[0][0]).not.toHaveProperty("sourceKind", "scan");
+    // The source link column belongs to scans; a photo upload never touches it.
+    expect(JSON.stringify(fake.calls)).not.toContain("source_url");
   });
 
   it("reuses an existing source upload instead of storing it again", async () => {
