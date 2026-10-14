@@ -238,6 +238,8 @@ export type RunConversionOptions = {
   feedback?: string;
   /** A plan drawn from a 3D scan gets its own prompt; everything else is a photo. */
   sourceKind?: FloorplanSourceKind;
+  /** Where north points on the sheet (degrees clockwise from up). Only scans know it. */
+  compassRotationDegrees?: number | null;
   signal: AbortSignal;
   send: ConversionSend;
 };
@@ -251,6 +253,7 @@ export async function runConversion({
   source,
   feedback,
   sourceKind = "photo",
+  compassRotationDegrees = null,
   signal,
   send,
 }: RunConversionOptions) {
@@ -314,6 +317,7 @@ export async function runConversion({
         const preview = await composeBrandedFloorplan(generated.buffer, {
           preserveTones: true,
           backgroundColor: background,
+          compassRotationDegrees,
         });
         const measured = await measureStyleDeviation(preview.output);
 
@@ -415,6 +419,7 @@ export async function runConversion({
   // threshold and the beige tint to turn a photo into brand output.
   const branded = await composeBrandedFloorplan(drawingBuffer, {
     preserveTones: usedEngine === "ai",
+    compassRotationDegrees,
     ...(usedEngine === "ai" && drawingBackground
       ? { backgroundColor: drawingBackground }
       : {}),

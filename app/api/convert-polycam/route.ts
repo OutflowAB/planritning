@@ -9,6 +9,7 @@ import {
 } from "@/lib/floorplan/run-conversion";
 import { fetchRoomplan, PolycamError } from "@/lib/polycam/fetch-roomplan";
 import { parseRoomplan } from "@/lib/polycam/parse-roomplan";
+import { compassRotationFromScan } from "@/lib/polycam/compass";
 import { renderPlan } from "@/lib/polycam/render-plan";
 import { parsePolycamCaptureId, polycamCaptureUrl } from "@/lib/polycam/url";
 import { requireRole } from "@/lib/server-auth";
@@ -119,6 +120,8 @@ export async function POST(request: Request) {
   return createConversionStream(async (send) => {
     let inputBuffer: Buffer;
     let source: ConversionSource;
+    // Only a fresh scan carries a direction; a redraw from a stored plan image does not.
+    let compassRotationDegrees: number | null = null;
 
     if (storedSource) {
       inputBuffer = storedSource.buffer;
@@ -153,6 +156,10 @@ export async function POST(request: Request) {
         );
 
         inputBuffer = plan.png;
+        compassRotationDegrees = compassRotationFromScan(
+          roomplan.orientationDegrees,
+          roomplan.alignment,
+        );
         source = {
           fileName: `polycam-${id}.png`,
           mimeType: "image/png",
@@ -173,6 +180,7 @@ export async function POST(request: Request) {
       source,
       feedback,
       sourceKind: "scan",
+      compassRotationDegrees,
       signal: request.signal,
       send,
     });
