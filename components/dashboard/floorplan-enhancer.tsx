@@ -41,6 +41,7 @@ import {
 import {
   CONVERTER_TRANSFER_KEY,
   hasPendingConverterTransfer,
+  setConverterConversionInFlight,
 } from "@/lib/startsida-converter-session";
 import {
   clearPendingGenerationReview,
@@ -621,6 +622,12 @@ export function FloorplanEnhancer() {
     [clearFromUploadQuery],
   );
 
+
+  // Tells the host a job is running so leaving the page does not reset the converter.
+  useEffect(() => {
+    setConverterConversionInFlight(isSubmitting);
+    return () => setConverterConversionInFlight(false);
+  }, [isSubmitting]);
 
   useEffect(() => {
     return () => {
