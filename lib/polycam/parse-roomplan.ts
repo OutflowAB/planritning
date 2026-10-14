@@ -58,7 +58,7 @@ export type RoomplanModel = {
   openings: PlanOpening[];
   rooms: PlanRoom[];
   alignment: PlanAlignment | null;
-  /** Compass bearing of the scan, when RoomPlan recorded one. Not used for drawing yet. */
+  /** Compass bearing of the scan, when RoomPlan recorded one. Feeds the sheet's compass (see compass.ts), not the plan itself. */
   orientationDegrees: number | null;
   /** Elements that were present but malformed and therefore left out. */
   skipped: number;
