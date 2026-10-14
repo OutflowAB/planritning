@@ -24,7 +24,7 @@ import {
 } from "@/lib/image/brand-floorplan";
 import { imageUrl } from "@/lib/image-url";
 import { createThumbnail, thumbnailPath } from "@/lib/image/thumbnail";
-import { getAdminSupabase, normaliseEtag } from "@/lib/supabase-server";
+import { getAdminSupabase, normaliseEtag, SCAN_UPLOADS_PREFIX } from "@/lib/supabase-server";
 
 /**
  * The conversion pipeline behind every convert route: from the source image to a stored,
@@ -142,7 +142,9 @@ export async function resolveSourceUploadId(
     source.fileName.split(".").pop()?.toLowerCase() ||
     source.mimeType.split("/").pop()?.toLowerCase() ||
     "jpg";
-  const sourceStoragePath = `${UPLOADS_PREFIX}${Date.now()}-${crypto.randomUUID()}.${extension}`;
+  // A plan drawn from a scan gets its own prefix: the redraw route relies on it to tell scan
+  // plans from photos without needing the optional source_url column.
+  const sourceStoragePath = `${source.sourceUrl ? SCAN_UPLOADS_PREFIX : UPLOADS_PREFIX}${Date.now()}-${crypto.randomUUID()}.${extension}`;
 
   const { error: sourceStorageError } = await supabase.storage
     .from(BUCKET_NAME)

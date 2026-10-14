@@ -91,9 +91,13 @@ describe("fetchRoomplan", () => {
 
   it("does not follow a second redirect from storage", async () => {
     fetchMock.mockResolvedValueOnce(redirectTo(STORAGE_URL)).mockImplementationOnce(async (_url, init) => {
-      // What undici does with redirect: "error" when the response is a redirect.
-      expect(init?.redirect).toBe("error");
-      throw new TypeError("fetch failed: unexpected redirect");
+      // Storage answers with a redirect. undici rejects it only when asked for
+      // redirect: "error"; with any other mode the file would be served from the target. The
+      // outcome is decided here, not by an expect inside the mock (the code swallows throws).
+      if (init?.redirect === "error") {
+        throw new TypeError("fetch failed: unexpected redirect");
+      }
+      return json({ walls: [] });
     });
     expect(await codeOf(fetchRoomplan(ID))).toBe("unavailable");
   });

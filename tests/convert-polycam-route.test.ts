@@ -11,11 +11,10 @@ import { createFakeSupabase, type FakeSupabase } from "./helpers/fake-supabase";
 const mocks = vi.hoisted(() => ({
   supabase: null as unknown,
   generate: vi.fn(),
+  requireRole: vi.fn(),
 }));
 
-vi.mock("@/lib/server-auth", () => ({
-  requireRole: vi.fn(async () => ({ ok: true, role: "user" })),
-}));
+vi.mock("@/lib/server-auth", () => ({ requireRole: mocks.requireRole }));
 
 vi.mock("@/lib/supabase-server", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/supabase-server")>()),
@@ -58,6 +57,8 @@ beforeAll(async () => {
 beforeEach(() => {
   fake = createFakeSupabase();
   mocks.supabase = fake.client;
+  mocks.requireRole.mockReset();
+  mocks.requireRole.mockResolvedValue({ ok: true, role: "user" });
   mocks.generate.mockReset();
   mocks.generate.mockImplementation(async () => ({
     buffer: referencePng,
@@ -104,6 +105,18 @@ async function collect(response: Response) {
 }
 
 describe("POST /api/convert-polycam", () => {
+  it.each([401, 403])("answers %i before any fetch or database call when the role check fails", async (status) => {
+    mocks.requireRole.mockResolvedValueOnce({
+      ok: false,
+      response: new Response(JSON.stringify({ message: "Nej" }), { status }),
+    });
+    const response = await POST(jsonRequest({ url: `https://poly.cam/capture/${ID}` }));
+    expect(response.status).toBe(status);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fake.calls).toEqual([]);
+    expect(mocks.generate).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["no link", {}],
     ["another host", { url: `https://evil.example.com/capture/${ID}` }],
@@ -164,7 +177,7 @@ describe("POST /api/convert-polycam", () => {
 
     // The rendered plan is the stored source, so the compare slider and cascade delete work.
     const source = fake.table.get(done.sourceImageId);
-    expect(source?.file_path).toMatch(/^uploads\/\d+-[0-9a-f-]+\.png$/);
+    expect(source?.file_path).toMatch(/^uploads\/polycam-\d+-[0-9a-f-]+\.png$/);
     expect(source?.mime_type).toBe("image/png");
     const storedSource = fake.storage.get(source?.file_path as string);
     expect((await sharp(storedSource).metadata()).height).toBe(2560);
@@ -245,8 +258,8 @@ describe("POST /api/convert-polycam", () => {
       .png()
       .toBuffer();
     fake = createFakeSupabase({
-      rows: [{ id: 42, file_name: "bild-42.png", file_path: "uploads/plan.png", mime_type: "image/png" }],
-      objects: { "uploads/plan.png": storedPlan },
+      rows: [{ id: 42, file_name: "bild-42.png", file_path: "uploads/polycam-plan.png", mime_type: "image/png" }],
+      objects: { "uploads/polycam-plan.png": storedPlan },
     });
     mocks.supabase = fake.client;
 
@@ -266,6 +279,7 @@ describe("POST /api/convert-polycam", () => {
   it.each([
     ["an unknown id", {}],
     ["a generated image", { 42: "generated/x.png" }],
+    ["a photo upload", { 42: "uploads/1791-photo.png" }],
   ])("refuses to redraw from %s", async (_label, paths: Record<number, string>) => {
     fake = createFakeSupabase({
       rows: Object.entries(paths).map(([id, filePath]) => ({

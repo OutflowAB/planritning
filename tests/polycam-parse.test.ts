@@ -138,3 +138,29 @@ describe("parseRoomplan", () => {
     expect(model.skipped).toBe(3);
   });
 });
+
+describe("parseRoomplan limits and storeys", () => {
+  const wall = (story: number, id: string) => ({
+    identifier: id,
+    story,
+    transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    dimensions: [3, 2.5, 0.1],
+  });
+
+  it("rejects a file whose rooms hold too many vertices in total", () => {
+    const ring = { vertices_x: Array.from({ length: 1000 }, (_, i) => i / 100), vertices_z: Array.from({ length: 1000 }, (_, i) => (i * i) % 7), story: 0 };
+    expect(() =>
+      parseRoomplan({ walls: [wall(0, "a")], rooms: Array.from({ length: 21 }, () => ring) }),
+    ).toThrow();
+  });
+
+  it("puts an opening on the storey of its parent wall", () => {
+    const door = {
+      parentIdentifier: "up",
+      transform: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+      dimensions: [0.8, 2, 0.1],
+    };
+    const model = parseRoomplan({ walls: [wall(0, "down"), wall(1, "up")], doors: [door] });
+    expect(model.openings[0].story).toBe(1);
+  });
+});

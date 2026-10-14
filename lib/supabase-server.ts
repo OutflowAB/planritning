@@ -15,6 +15,11 @@ export const REVIEWS_TABLE = "generation_reviews";
 export const DOCUMENTS_TABLE = "floor_plan_documents";
 export const GENERATION_EVENTS_TABLE = "generation_events";
 
+/**
+ * Sources drawn from a Polycam scan are stored under this prefix. It is the marker that lets
+ * the redraw route accept only scan plans, and it needs no database column.
+ */
+export const SCAN_UPLOADS_PREFIX = "uploads/polycam-";
 export const UPLOADS_PREFIX = "uploads/";
 export const GENERATED_PREFIX = "generated/";
 export const THUMBNAILS_PREFIX = "thumbs/";

@@ -93,6 +93,10 @@ Begransningar:
   inklistrade texten, bara en adress den bygger sjalv fran skanningens id, och foljer bara
   en omdirigering till Polycams lagring. Skanningens GPS-position (`latLonAlt`) lases aldrig.
 
+Bara planer som skapats fran en lank kan ritas om via `sourceImageId`; de kanns igen pa att
+originalbilden ligger under `uploads/polycam-` i lagringen. Det kraver ingen kolumn eller
+migration (planer fran innan andringen kan inte ritas om och far klistra in lanken igen).
+
 Lanken sparas i kolumnen `uploaded_images.source_url` nar migrationen
 `database/2026-10-14-uploaded-images-source-url.sql` ar kord. Innan dess fungerar allt som
 vanligt, lanken sparas bara inte (en varning loggas).
