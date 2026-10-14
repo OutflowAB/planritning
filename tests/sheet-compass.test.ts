@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { compassLetterTilt } from "@/lib/image/compass-geometry";
 import { COMPASS_GEOMETRY, compassLayout, compassNeedlePoints, compassSvg } from "@/lib/image/sheet-compass";
 
 describe("compass geometry", () => {
@@ -29,20 +30,39 @@ describe("compass geometry", () => {
     expect(needle.tail.y).toBeGreaterThan(0);
   });
 
-  it("turns the whole badge, letters included, as one group", () => {
+  it("turns rings, ticks and needle as one group", () => {
     const svg = compassSvg(500, 400, 100, 37);
     const open = svg.indexOf('<g transform="rotate(37 500 400)">');
     expect(open).toBeGreaterThanOrEqual(0);
-    // Letters are paths, after the rings and inside the same rotated group.
-    expect(svg.indexOf("<path", open)).toBeGreaterThan(svg.indexOf("<polygon", open));
+    const group = svg.slice(open, svg.indexOf("</g>\n    </g>", open));
+    expect(group.match(/<circle/g)).toHaveLength(2);
+    expect(group.match(/<line/g)).toHaveLength(4);
+    expect(group.match(/<polygon/g)).toHaveLength(2);
     expect(svg.match(/<path/g)).toHaveLength(4);
-    expect(svg.match(/<line/g)).toHaveLength(4);
-    expect(svg.match(/<circle/g)).toHaveLength(2);
   });
 
-  it("changes only the rotation between two directions", () => {
-    const a = compassSvg(500, 400, 100, 0);
-    const b = compassSvg(500, 400, 100, 90);
-    expect(a.replace("rotate(0 ", "rotate(90 ")).toBe(b);
+  it("keeps every letter readable: tilted with the badge, never upside down", () => {
+    for (const rotation of [0, 20, 89, 91, 160, 215, 270, 359]) {
+      const tilt = compassLetterTilt(rotation);
+      expect(tilt).toBeGreaterThan(-90);
+      expect(tilt).toBeLessThanOrEqual(90);
+      // Same tilt as the badge, or the badge's tilt flipped by a half turn.
+      expect(((tilt - rotation) % 180 + 180) % 180).toBeCloseTo(0, 6);
+    }
+    expect(compassLetterTilt(160)).toBeCloseTo(-20, 6);
+    expect(compassLetterTilt(215)).toBeCloseTo(35, 6);
+  });
+
+  it("moves the letters around the band with the rotation", () => {
+    const at = (rotation: number) =>
+      [...compassSvg(500, 400, 100, rotation).matchAll(/<g transform="rotate\(([-\d.]+) ([\d.]+) ([\d.]+)\)"><path/g)].map(
+        (m) => ({ x: Number(m[2]), y: Number(m[3]) }),
+      );
+    const north = at(0)[0];
+    expect(north.x).toBeCloseTo(500, 1);
+    expect(north.y).toBeCloseTo(400 - layout.letterRadius, 1);
+    const east = at(90)[0]; // north has turned to the right
+    expect(east.x).toBeCloseTo(500 + layout.letterRadius, 1);
+    expect(east.y).toBeCloseTo(400, 1);
   });
 });
