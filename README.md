@@ -84,7 +84,10 @@ Begransningar:
   (Space/Floorplan). Andra skanningar saknar planritningsdata och ger ett tydligt fel.
 - Skanningen maste vara delad som publik lank. Privata lankar ger felet "privat eller
   felaktig".
-- Bara den forsta vaningen ritas om skanningen har flera.
+- Har skanningen flera vaningar fragar appen vilka som ska ritas innan nagot genereras
+  (`POST /api/convert-polycam/inspect` laser bara filen). Varje vald vaning ar en egen
+  konvertering och en egen generation; de granskas en i taget. Ej granskade vaningar finns
+  bara i webblasarens minne och forsvinner vid omladdning.
 - Rumsnamn, inredning och entrepil kommer inte fran skanningen och ritas inte; de laggs till
   i editorn. Saknar skanningen en vagg saknas den aven i planen.
 - Polycam har inget publikt API. Hamtningen anvander samma odokumenterade adress som

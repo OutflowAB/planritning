@@ -57,6 +57,7 @@ import {
   setPendingSourceSelection,
 } from "@/lib/startsida-source-session";
 import { ApiError, apiFetch, apiJson } from "@/lib/api-client";
+import { StoreyPicker, StoreyProgress, storeyLabel, type StoreyOption } from "@/components/dashboard/storey-picker";
 import { dispatchGenerationUpdated } from "@/lib/app-events";
 import { imageUrl } from "@/lib/image-url";
 import type { ImageListItem } from "@/app/api/images/route";
@@ -565,6 +566,12 @@ export function FloorplanEnhancer() {
   // which reuses the stored plan and tells the model what it is looking at.
   const [isScanSource, setIsScanSource] = useState(() => cachedReviewPreview.isScanSource);
   const [polycamLink, setPolycamLink] = useState("");
+  // Multi-storey scans: the floors to choose from, the run in progress, and finished plans
+  // still waiting for their turn in the review (they are reviewed one after another).
+  const [isInspecting, setIsInspecting] = useState(false);
+  const [storeyChoice, setStoreyChoice] = useState<{ url: string; storeys: StoreyOption[] } | null>(null);
+  const [multiRun, setMultiRun] = useState<{ labels: string[]; done: number } | null>(null);
+  const [queuedResults, setQueuedResults] = useState<ConvertDoneEvent[]>([]);
   const [previewImageType, setPreviewImageType] = useState<"source" | "result" | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [isCompareSliderReady, setIsCompareSliderReady] = useState(() =>
@@ -1105,6 +1112,115 @@ export function FloorplanEnhancer() {
     dispatchGenerationUpdated();
   }
 
+  /** Puts a finished scan conversion up for review. */
+  function showScanResult(conversion: ConvertDoneEvent) {
+    // There is no local file: the plan the server drew from the scan is the original.
+    const scanPreviewUrl = imageUrl(conversion.sourceImageId, "full");
+    setSourceFile(null);
+    setSourcePreviewUrl((previous) => {
+      if (previous === scanPreviewUrl) {
+        return previous;
+      }
+      revokeIfObjectUrl(previous);
+      return scanPreviewUrl;
+    });
+    setIsScanSource(true);
+    setPolycamLink("");
+    applyConversionResult(conversion, scanPreviewUrl, "scan");
+  }
+
+  /** Moves on to the next finished storey, if any. Returns whether there was one. */
+  function showNextQueuedResult() {
+    const [next, ...rest] = queuedResults;
+    if (!next) {
+      return false;
+    }
+    setQueuedResults(rest);
+    clearGenerationResult();
+    showScanResult(next);
+    return true;
+  }
+
+  /**
+   * Draws the chosen storeys one at a time, each as its own conversion (and its own
+   * generation). The first finished plan is shown at once; the rest wait their turn.
+   */
+  async function processPolycamStoreys(url: string, stories: number[], storeys: StoreyOption[]) {
+    if (isSubmitting) {
+      return;
+    }
+
+    const labels = stories.map((story) =>
+      storeyLabel(
+        storeys.findIndex((entry) => entry.story === story),
+        storeys.length,
+      ),
+    );
+    const results: ConvertDoneEvent[] = [];
+
+    setErrorMessage("");
+    setStoreyChoice(null);
+    setIsSubmitting(true);
+    setProcessingStatusMessage(null);
+    setMultiRun({ labels, done: 0 });
+
+    try {
+      for (const [index, story] of stories.entries()) {
+        const response = await apiFetch("/api/convert-polycam", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, story }),
+        });
+        results.push(
+          await readConvertStream(response, {
+            onStatus: (event) => setProcessingStatusMessage(`${labels[index]}: ${event.message}`),
+          }),
+        );
+        setMultiRun({ labels, done: index + 1 });
+      }
+    } catch (error) {
+      // Floors already drawn are kept and reviewable; only the failing one and later ones are lost.
+      const reason = error instanceof Error ? error.message : "Ett oväntat fel uppstod.";
+      setErrorMessage(
+        results.length > 0
+          ? `${labels[results.length]} kunde inte konverteras: ${reason}`
+          : reason,
+      );
+    } finally {
+      setIsSubmitting(false);
+      setProcessingStatusMessage(null);
+      setMultiRun(null);
+    }
+
+    const [first, ...rest] = results;
+    if (first) {
+      setQueuedResults(rest);
+      showScanResult(first);
+    }
+  }
+
+  /** Reads the scan first: a multi-storey one asks which floors to draw before anything is billed. */
+  async function inspectPolycamLink(link: string) {
+    setErrorMessage("");
+    setIsInspecting(true);
+    try {
+      const { storeys } = await apiJson<{ storeys: StoreyOption[] }>("/api/convert-polycam/inspect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: link }),
+      });
+      if (storeys.length > 1) {
+        setStoreyChoice({ url: link, storeys });
+      } else {
+        void processPolycamLink({ url: link });
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
+    } finally {
+      setIsInspecting(false);
+    }
+  }
+
   /**
    * Converts a Polycam capture. With a link, the server downloads and draws the scan; with
    * the id of a plan it drew before (a redraw), it reuses that plan without Polycam.
@@ -1132,19 +1248,7 @@ export function FloorplanEnhancer() {
         onStatus: (event) => setProcessingStatusMessage(event.message),
       });
 
-      // There is no local file: the plan the server drew from the scan is the original.
-      const scanPreviewUrl = imageUrl(conversion.sourceImageId, "full");
-      setSourceFile(null);
-      setSourcePreviewUrl((previous) => {
-        if (previous === scanPreviewUrl) {
-          return previous;
-        }
-        revokeIfObjectUrl(previous);
-        return scanPreviewUrl;
-      });
-      setIsScanSource(true);
-      setPolycamLink("");
-      applyConversionResult(conversion, scanPreviewUrl, "scan");
+      showScanResult(conversion);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
     } finally {
@@ -1160,7 +1264,7 @@ export function FloorplanEnhancer() {
       return;
     }
 
-    void processPolycamLink({ url: link });
+    void inspectPolycamLink(link);
   }
 
   function startConversion() {
@@ -1233,6 +1337,11 @@ export function FloorplanEnhancer() {
           setSectionOverlayTarget(null);
           setRejectComment("");
           dispatchGenerationUpdated();
+          // More storeys are waiting: stay here and review the next one instead of leaving.
+          if (showNextQueuedResult()) {
+            showToast("Våningen är sparad. Nästa våning väntar på granskning.");
+            return;
+          }
           router.push(
             buildPlanritningarHref(pathname, {
               imageId: resultImageId,
@@ -1247,6 +1356,8 @@ export function FloorplanEnhancer() {
         setShowApproveDestinationModal(false);
         setSectionOverlayTarget(null);
         setRejectComment("");
+        // The editor takes this one; the next storey is ready for when the user comes back.
+        showNextQueuedResult();
         router.push(
           buildVerktygHref(pathname, {
             imageId: resultImageId,
@@ -1491,7 +1602,10 @@ export function FloorplanEnhancer() {
       />
 
       {isSubmitting ? (
-        <ProcessingView statusMessage={processingStatusMessage} />
+        <>
+          <ProcessingView statusMessage={processingStatusMessage} />
+          {multiRun ? <StoreyProgress labels={multiRun.labels} done={multiRun.done} /> : null}
+        </>
       ) : (
         <>
           {showDropzone ? (
@@ -1522,7 +1636,17 @@ export function FloorplanEnhancer() {
             </label>
           ) : null}
 
-          {showDropzone ? (
+          {showDropzone && storeyChoice ? (
+            <StoreyPicker
+              storeys={storeyChoice.storeys}
+              onCancel={() => setStoreyChoice(null)}
+              onConfirm={(stories) =>
+                void processPolycamStoreys(storeyChoice.url, stories, storeyChoice.storeys)
+              }
+            />
+          ) : null}
+
+          {showDropzone && !storeyChoice ? (
             <form
               onSubmit={(event) => {
                 event.preventDefault();
@@ -1547,10 +1671,10 @@ export function FloorplanEnhancer() {
                 />
                 <button
                   type="submit"
-                  disabled={isSubmitting || polycamLink.trim().length === 0}
+                  disabled={isSubmitting || isInspecting || polycamLink.trim().length === 0}
                   className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Hämta från Polycam
+                  {isInspecting ? "Läser skanningen..." : "Hämta från Polycam"}
                 </button>
               </div>
               <p className="text-xs text-[#7b746a]">
