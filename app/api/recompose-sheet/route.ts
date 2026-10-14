@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 import { composeBrandedFloorplan } from "@/lib/image/brand-floorplan";
@@ -36,7 +37,11 @@ function reply(message: string, status: number, code?: string) {
 const NOT_ADJUSTABLE = "Kompassen kan inte ändras för den här planen. Den skapades innan originalunderlaget sparades.";
 const EDITED = "Planen har redigerats i verktyget, så kompassen kan inte ändras utan att redigeringarna går förlorade.";
 
-async function findSheet(imageId: unknown) {
+type FoundSheet =
+  | { error: Response }
+  | { error?: undefined; supabase: SupabaseClient; row: { id: number; file_path: string; file_size: number } };
+
+async function findSheet(imageId: unknown): Promise<FoundSheet> {
   const id = typeof imageId === "string" ? Number(imageId) : imageId;
   if (typeof id !== "number" || !Number.isInteger(id) || id <= 0) {
     return { error: reply("Ogiltig bildreferens.", 400) };
@@ -68,14 +73,14 @@ function describe(meta: SheetMeta) {
   };
 }
 
-export async function GET(request: Request) {
+export async function GET(request: Request): Promise<Response> {
   const session = await requireRole();
   if (!session.ok) {
     return session.response;
   }
 
   const found = await findSheet(new URL(request.url).searchParams.get("imageId"));
-  if ("error" in found) {
+  if (found.error) {
     return found.error;
   }
 
@@ -97,7 +102,7 @@ export async function GET(request: Request) {
 }
 
 /** POST /api/recompose-sheet  { imageId, compass: { visible, rotation } } */
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<Response> {
   const session = await requireRole();
   if (!session.ok) {
     return session.response;
@@ -120,7 +125,7 @@ export async function POST(request: Request) {
   }
 
   const found = await findSheet(body.imageId);
-  if ("error" in found) {
+  if (found.error) {
     return found.error;
   }
   const { supabase, row } = found;
