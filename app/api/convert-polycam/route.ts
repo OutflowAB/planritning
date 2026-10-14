@@ -12,6 +12,7 @@ import { parseRoomplan } from "@/lib/polycam/parse-roomplan";
 import { compassRotationFromScan } from "@/lib/polycam/compass";
 import { renderPlan } from "@/lib/polycam/render-plan";
 import { parsePolycamCaptureId, polycamCaptureUrl } from "@/lib/polycam/url";
+import { parseFloorGroupInput } from "@/lib/floor-groups";
 import { normaliseRotation, parseCompassSettings } from "@/lib/image/compass-settings";
 import { requireRole } from "@/lib/server-auth";
 import {
@@ -76,6 +77,8 @@ export async function POST(request: Request) {
       : undefined;
   // The broker's compass choice for this run; absent or malformed falls back to the scan's.
   const compass = parseCompassSettings(body.compass);
+  // Set when this is one floor of a multi-floor house, so the floors are kept together.
+  const floorGroup = parseFloorGroupInput(body.floorGroup);
   const sourceImageId = parseSourceImageId(body.sourceImageId);
   const captureId = sourceImageId === null ? parsePolycamCaptureId(body.url) : null;
 
@@ -188,6 +191,7 @@ export async function POST(request: Request) {
       sourceKind: "scan",
       scanRotationDegrees,
       compass,
+      floorGroup,
       signal: request.signal,
       send,
     });

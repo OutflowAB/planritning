@@ -4,6 +4,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { parseFloorGroup } from "@/lib/floor-groups";
 import { readConvertStream } from "@/lib/floorplan/convert-stream";
 import {
   compassRotationToDraw,
@@ -177,6 +178,33 @@ describe("compass choice on the convert routes", () => {
       await photoPOST(photoRequest({ compassVisible: "1", compassRotation: "-30" })),
     );
     expect(chosen.compass).toMatchObject({ visible: true, rotation: 330, scanRotation: null });
+  });
+});
+
+describe("floor group on the scan route", () => {
+  const group = { run: "0123456789ab", position: 1, total: 3 };
+
+  it("stores a floor of a house under a name that carries the group", async () => {
+    const result = await done(await scanPOST(scanRequest({ floorGroup: group })));
+    expect(result.savedImagePath).toMatch(/^generated\/\d+-[0-9a-f-]{36}-g0123456789ab-f1-n3\.png$/);
+    expect(parseFloorGroup(result.savedImagePath)).toEqual(group);
+    // The raw drawing follows the same name.
+    expect(fake.storage.has(result.savedImagePath.replace("generated/", "raw/"))).toBe(true);
+  });
+
+  it.each([
+    ["no group", {}],
+    ["an invalid run", { floorGroup: { run: "../x", position: 0, total: 2 } }],
+    ["a position outside the house", { floorGroup: { run: "0123456789ab", position: 5, total: 2 } }],
+  ])("keeps the plain name for %s", async (_label, extra) => {
+    const result = await done(await scanPOST(scanRequest(extra)));
+    expect(parseFloorGroup(result.savedImagePath)).toBeNull();
+    expect(result.savedImagePath).toMatch(/^generated\/\d+-[0-9a-f-]{36}\.png$/);
+  });
+
+  it("never groups a photo", async () => {
+    const result = await done(await photoPOST(photoRequest()));
+    expect(parseFloorGroup(result.savedImagePath)).toBeNull();
   });
 });
 

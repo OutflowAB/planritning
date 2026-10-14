@@ -28,6 +28,7 @@ import {
   defaultCompass,
   type CompassSettings,
 } from "@/lib/image/compass-settings";
+import { floorGroupSuffix, type FloorGroup } from "@/lib/floor-groups";
 import { storeSheetSource } from "@/lib/image/sheet-source";
 import { createThumbnail, thumbnailPath } from "@/lib/image/thumbnail";
 import { getAdminSupabase, normaliseEtag, SCAN_UPLOADS_PREFIX } from "@/lib/supabase-server";
@@ -248,6 +249,8 @@ export type RunConversionOptions = {
   scanRotationDegrees?: number | null;
   /** The broker's choice; without it a scan shows its own direction and a photo no compass. */
   compass?: CompassSettings | null;
+  /** Set for the floors of a multi-floor house, so the library can show them together. */
+  floorGroup?: FloorGroup | null;
   signal: AbortSignal;
   send: ConversionSend;
 };
@@ -263,6 +266,7 @@ export async function runConversion({
   sourceKind = "photo",
   scanRotationDegrees = null,
   compass: requestedCompass = null,
+  floorGroup = null,
   signal,
   send,
 }: RunConversionOptions) {
@@ -456,7 +460,7 @@ export async function runConversion({
     throw new ConvertFailure(sourceUploadError ?? "Kunde inte spara källbild.");
   }
 
-  const uniqueGeneratedName = `${Date.now()}-${crypto.randomUUID()}.png`;
+  const uniqueGeneratedName = `${Date.now()}-${crypto.randomUUID()}${floorGroupSuffix(floorGroup)}.png`;
   const storagePath = `${GENERATED_PREFIX}${uniqueGeneratedName}`;
 
   const { error: uploadError } = await supabase.storage
