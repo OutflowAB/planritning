@@ -8,7 +8,11 @@ import {
   type ConvertStreamEvent,
 } from "@/lib/floorplan/convert-stream";
 import { imageDownloadFileName } from "@/lib/image-naming";
-import { generateFloorplanLineArt, resolveImageEngine } from "@/lib/image/ai-floorplan";
+import {
+  generateFloorplanLineArt,
+  resolveImageEngine,
+  type FloorplanSourceKind,
+} from "@/lib/image/ai-floorplan";
 import { measureStyleDeviation } from "@/lib/image/style-conformance";
 import { isStyleReviewEnabled, reviewStyleAgainstReferences } from "@/lib/image/style-review";
 import {
@@ -211,6 +215,8 @@ export type RunConversionOptions = {
   inputBuffer: Buffer;
   source: ConversionSource;
   feedback?: string;
+  /** A plan drawn from a 3D scan gets its own prompt; everything else is a photo. */
+  sourceKind?: FloorplanSourceKind;
   signal: AbortSignal;
   send: ConversionSend;
 };
@@ -223,12 +229,17 @@ export async function runConversion({
   inputBuffer,
   source,
   feedback,
+  sourceKind = "photo",
   signal,
   send,
 }: RunConversionOptions) {
   const requestedEngine = resolveImageEngine();
 
-  send({ type: "status", message: "Förbereder uppladdad bild", engine: requestedEngine });
+  send({
+    type: "status",
+    message: sourceKind === "scan" ? "Förbereder planritningen" : "Förbereder uppladdad bild",
+    engine: requestedEngine,
+  });
 
   const orientedColorBuffer = await prepareSourceImage(inputBuffer);
   const orientedMetadata = await sharp(orientedColorBuffer).metadata();
@@ -272,6 +283,7 @@ export async function runConversion({
           sourceHeight,
           feedback: corrections,
           ...(attempt > 0 ? { model: resolveRetryModel() } : {}),
+          sourceKind,
           signal,
         });
 
