@@ -216,9 +216,41 @@ function closeExteriorCorners(walls: DrawnWall[]) {
   }
 }
 
-function pickStory(model: RoomplanModel) {
-  const stories = [...new Set(model.walls.map((wall) => wall.story))].sort((a, b) => a - b);
-  return { story: stories[0] ?? 0, storyCount: stories.length };
+function storiesOf(model: RoomplanModel) {
+  return [...new Set(model.walls.map((wall) => wall.story))].sort((a, b) => a - b);
+}
+
+/** A storey the user can choose: counts and floor area only, no guesses about what it is. */
+export type StoreySummary = { story: number; wallCount: number; roomCount: number; areaM2: number };
+
+function polygonArea(vertices: Vec[]) {
+  let twice = 0;
+  vertices.forEach((p, i) => {
+    const q = vertices[(i + 1) % vertices.length];
+    twice += p.x * q.z - q.x * p.z;
+  });
+  return Math.abs(twice) / 2;
+}
+
+/** Storeys that have walls, lowest first. Cheap: reads the parsed file, draws nothing. */
+export function listStoreys(model: RoomplanModel): StoreySummary[] {
+  return storiesOf(model).map((story) => {
+    const rooms = model.rooms.filter((room) => room.story === story);
+    return {
+      story,
+      wallCount: model.walls.filter((wall) => wall.story === story).length,
+      roomCount: rooms.length,
+      areaM2: Math.round(rooms.reduce((sum, room) => sum + polygonArea(room.vertices), 0)),
+    };
+  });
+}
+
+function pickStory(model: RoomplanModel, requested?: number) {
+  const stories = storiesOf(model);
+  if (requested !== undefined && !stories.includes(requested)) {
+    throw new PolycamError("missing", "Den valda våningen finns inte i skanningen.");
+  }
+  return { story: requested ?? stories[0] ?? 0, storyCount: stories.length };
 }
 
 function noWalls(): never {
@@ -229,8 +261,8 @@ function noWalls(): never {
  * Everything the drawing is made of, in plan coordinates. Split from the SVG step so the door
  * swings can be checked against the walls without rasterising anything.
  */
-export function preparePlan(model: RoomplanModel) {
-  const { story, storyCount } = pickStory(model);
+export function preparePlan(model: RoomplanModel, requestedStory?: number) {
+  const { story, storyCount } = pickStory(model, requestedStory);
   const align = aligner(model.alignment);
   const onStory = <T extends PlanElement | PlanRoom>(item: T) => item.story === story;
 
@@ -317,9 +349,9 @@ export function preparePlan(model: RoomplanModel) {
   return { story, storyCount, droppedShortWalls: candidateWalls.length - keptWalls.length, walls, openings, rooms };
 }
 
-export async function renderPlan(model: RoomplanModel): Promise<RenderedPlan> {
-  const { story, storyCount, droppedShortWalls, walls, openings } = preparePlan(model);
-
+/** Draws one storey: the one asked for, or the lowest when none is given. */
+export async function renderPlan(model: RoomplanModel, options: { story?: number } = {}): Promise<RenderedPlan> {
+  const { story, storyCount, droppedShortWalls, walls, openings } = preparePlan(model, options.story);
 
   // Fit the drawing: the bounding box of everything drawn, including the door swings.
   const outline: Vec[] = walls.flatMap(wallOutline);
