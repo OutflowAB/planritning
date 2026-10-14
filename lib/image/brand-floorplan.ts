@@ -1,6 +1,8 @@
 import path from "node:path";
 import sharp from "sharp";
 
+import { compassSvg } from "@/lib/image/sheet-compass";
+import { sheetTextSvg } from "@/lib/image/sheet-font";
 import { cropToMainContent, type CropBoundingBox } from "@/lib/image/smart-crop";
 
 /**
@@ -12,38 +14,70 @@ import { cropToMainContent, type CropBoundingBox } from "@/lib/image/smart-crop"
 export const TARGET_MAX_WIDTH = 2560;
 export const LINE_THRESHOLD = 190;
 
-export const ASPECT_RATIO_WIDTH = 7;
-export const ASPECT_RATIO_HEIGHT = 5;
-export const LOGO_WIDTH_RATIO = 0.3;
+/**
+ * The sheet is A4 portrait, like the house-style references (2879 x 4071 px): height is the
+ * width times √2, rounded to a whole pixel.
+ */
+export const A4_HEIGHT_PER_WIDTH = Math.SQRT2;
 
 /**
- * The layout was designed against a 1200px-wide drawing, and every spacing below is a pixel
- * value from that design. They are derived from the drawing's actual width rather than stored
- * as constants, because a constant tuned for one resolution silently shrinks the logo, the
- * frame and the margins the moment the working resolution changes.
+ * Every position on the sheet is a fraction of the canvas width (read off the references),
+ * so the frame, heading, compass and logo keep their proportions whatever resolution the
+ * drawing is worked at. A pixel constant tuned for one resolution silently shrinks them the
+ * moment that resolution changes.
  */
-const LAYOUT_REFERENCE_WIDTH = 1200;
+const SHEET = {
+  frameInset: 0.02,
+  frameStroke: 0.0014,
+  headingCenterY: 0.095,
+  headingSize: 0.031,
+  headingLetterSpacingEm: 0.05,
+  compassCenterX: 0.924,
+  compassCenterY: 0.076,
+  compassRadius: 0.05,
+  logoWidth: 0.24,
+  /** Logo centre, as a fraction of the sheet height. */
+  logoCenterY: 0.932,
+  /** The drawing may use this part of the sheet: between the heading and the logo. */
+  areaTop: 0.13,
+  areaBottom: 0.88,
+  areaWidth: 0.84,
+} as const;
 
 export type LayoutMetrics = {
-  contentPadding: number;
-  logoGap: number;
-  logoMaxWidth: number;
+  logoWidth: number;
+  logoCenterY: number;
   frameStroke: number;
   frameInset: number;
+  headingCenterY: number;
+  headingSize: number;
+  compassCenterX: number;
+  compassCenterY: number;
+  compassRadius: number;
+  /** The slot the drawing is centred in. */
+  areaTop: number;
+  areaHeight: number;
 };
 
-export function resolveLayoutMetrics(drawingWidth: number): LayoutMetrics {
-  const scale = Math.max(1, drawingWidth / LAYOUT_REFERENCE_WIDTH);
-  const scaled = (value: number) => Math.round(value * scale);
+export function resolveLayoutMetrics(canvasWidth: number): LayoutMetrics {
+  const canvasHeight = Math.round(canvasWidth * A4_HEIGHT_PER_WIDTH);
+  const px = (fraction: number) => Math.round(canvasWidth * fraction);
 
   return {
-    contentPadding: scaled(80),
-    logoGap: scaled(44),
-    logoMaxWidth: scaled(360),
-    frameStroke: scaled(3),
-    frameInset: scaled(30),
+    logoWidth: px(SHEET.logoWidth),
+    logoCenterY: Math.round(canvasHeight * SHEET.logoCenterY),
+    frameStroke: Math.max(2, px(SHEET.frameStroke)),
+    frameInset: px(SHEET.frameInset),
+    headingCenterY: px(SHEET.headingCenterY),
+    headingSize: px(SHEET.headingSize),
+    compassCenterX: px(SHEET.compassCenterX),
+    compassCenterY: px(SHEET.compassCenterY),
+    compassRadius: px(SHEET.compassRadius),
+    areaTop: Math.round(canvasHeight * SHEET.areaTop),
+    areaHeight: Math.round(canvasHeight * (SHEET.areaBottom - SHEET.areaTop)),
   };
 }
+
 const BEIGE_BACKGROUND = { r: 225, g: 212, b: 200, alpha: 1 };
 
 export type BrandedFloorplanLayout = {
@@ -74,10 +108,16 @@ export type ComposeBrandedFloorplanOptions = {
    */
   preserveTones?: boolean;
   /**
-   * Colour used to pad the drawing out to the 7:5 canvas. Pass the drawing's own background
+   * Colour used to pad the drawing out to the A4 canvas. Pass the drawing's own background
    * so the padding is seamless; without it the canvas falls back to the brand beige.
    */
   backgroundColor?: Rgb;
+  /**
+   * Draws the compass rose, with north this many degrees clockwise from the top of the sheet.
+   * Leave it out when no direction is known (photo uploads): a compass that guesses is worse
+   * than none.
+   */
+  compassRotationDegrees?: number | null;
 };
 
 /**
@@ -133,11 +173,11 @@ export async function prepareSourceImage(inputBuffer: Buffer) {
 
 /**
  * Turn a line drawing into the branded floor plan: pure black lines on the beige canvas,
- * centred above the logo inside the outer frame.
+ * centred between the heading and the logo, inside the outer frame, on an A4 portrait sheet.
  */
 export async function composeBrandedFloorplan(
   drawingBuffer: Buffer,
-  { preserveTones = false, backgroundColor }: ComposeBrandedFloorplanOptions = {},
+  { preserveTones = false, backgroundColor, compassRotationDegrees = null }: ComposeBrandedFloorplanOptions = {},
 ): Promise<BrandedFloorplanResult> {
   const thresholdedImageBuffer = await sharp(drawingBuffer)
     .grayscale()
@@ -184,18 +224,21 @@ export async function composeBrandedFloorplan(
         .png()
         .toBuffer();
 
-  const layout = resolveLayoutMetrics(imageWidth);
+  // The canvas is sized from the drawing: the smallest A4 sheet whose drawing slot holds it,
+  // so the drawing is never scaled and its aspect ratio is kept.
+  const slotHeightRatio = SHEET.areaBottom - SHEET.areaTop;
+  const canvasWidth = Math.ceil(
+    Math.max(
+      imageWidth / SHEET.areaWidth,
+      imageHeight / (slotHeightRatio * A4_HEIGHT_PER_WIDTH),
+    ),
+  );
+  const canvasHeight = Math.round(canvasWidth * A4_HEIGHT_PER_WIDTH);
+  const layout = resolveLayoutMetrics(canvasWidth);
 
   const logoFilePath = path.join(process.cwd(), "public", "sm-logo.svg");
-  const desiredLogoWidth = Math.min(
-    layout.logoMaxWidth,
-    Math.round(imageWidth * LOGO_WIDTH_RATIO),
-  );
   const logoBuffer = await sharp(logoFilePath)
-    .resize({
-      width: desiredLogoWidth,
-      withoutEnlargement: true,
-    })
+    .resize({ width: layout.logoWidth })
     .png()
     .toBuffer();
   const logoMetadata = await sharp(logoBuffer).metadata();
@@ -206,23 +249,15 @@ export async function composeBrandedFloorplan(
     throw new Error("Kunde inte läsa loggans storlek.");
   }
 
-  const contentWidth = Math.max(imageWidth, logoWidth);
-  const contentHeight = imageHeight + layout.logoGap + logoHeight;
-  const minCanvasWidth = contentWidth + layout.contentPadding * 2;
-  const minCanvasHeight = contentHeight + layout.contentPadding * 2;
-  const canvasScale = Math.ceil(
-    Math.max(minCanvasWidth / ASPECT_RATIO_WIDTH, minCanvasHeight / ASPECT_RATIO_HEIGHT),
-  );
-  const canvasWidth = canvasScale * ASPECT_RATIO_WIDTH;
-  const canvasHeight = canvasScale * ASPECT_RATIO_HEIGHT;
-
   const imageX = Math.floor((canvasWidth - imageWidth) / 2);
-  const contentTop = Math.floor((canvasHeight - contentHeight) / 2);
-  const imageY = contentTop;
+  const imageY = layout.areaTop + Math.floor((layout.areaHeight - imageHeight) / 2);
   const logoX = Math.floor((canvasWidth - logoWidth) / 2);
-  const logoY = imageY + imageHeight + layout.logoGap;
+  const logoY = layout.logoCenterY - Math.floor(logoHeight / 2);
+
+  // Frame, heading and compass are one SVG overlay. The text is outlines, not <text>, so no
+  // font has to exist on the server.
   const frameOverlay = Buffer.from(
-    `<svg width="${canvasWidth}" height="${canvasHeight}">
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${canvasWidth}" height="${canvasHeight}">
         <rect
           x="${layout.frameInset + layout.frameStroke / 2}"
           y="${layout.frameInset + layout.frameStroke / 2}"
@@ -232,6 +267,22 @@ export async function composeBrandedFloorplan(
           stroke="#000000"
           stroke-width="${layout.frameStroke}"
         />
+        ${sheetTextSvg("PLANLÖSNING", {
+          centerX: canvasWidth / 2,
+          centerY: layout.headingCenterY,
+          size: layout.headingSize,
+          letterSpacingEm: SHEET.headingLetterSpacingEm,
+        })}
+        ${
+          compassRotationDegrees === null
+            ? ""
+            : compassSvg(
+                layout.compassCenterX,
+                layout.compassCenterY,
+                layout.compassRadius,
+                compassRotationDegrees,
+              )
+        }
       </svg>`,
   );
 
