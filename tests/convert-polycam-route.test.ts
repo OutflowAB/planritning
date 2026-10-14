@@ -251,6 +251,13 @@ describe("POST /api/convert-polycam", () => {
     );
   });
 
+  it("reports a storey the scan does not have, before any generation", async () => {
+    await expect(
+      collect(await POST(jsonRequest({ url: `https://poly.cam/capture/${ID}`, story: 5 }))),
+    ).rejects.toThrow("Den valda våningen finns inte i skanningen.");
+    expect(mocks.generate).not.toHaveBeenCalled();
+  });
+
   it("redraws from the stored plan without contacting Polycam", async () => {
     const storedPlan = await sharp({
       create: { width: 600, height: 400, channels: 3, background: { r: 255, g: 255, b: 255 } },

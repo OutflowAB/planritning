@@ -33,7 +33,7 @@ function badRequest(message: string, status = 400) {
 }
 
 /**
- * POST /api/convert-polycam  { url?, sourceImageId?, feedback? }
+ * POST /api/convert-polycam  { url?, story?, sourceImageId?, feedback? }
  *
  * Converts a public Polycam capture into a house-style floor plan. The scan is drawn as a
  * plain top-down plan, stored in uploads/ as the source image, and then run through exactly
@@ -66,6 +66,11 @@ export async function POST(request: Request) {
   const feedback =
     typeof body.feedback === "string" && body.feedback.trim().length > 0
       ? body.feedback.trim().slice(0, 1000)
+      : undefined;
+  // Which storey of a multi-storey scan to draw; absent means the lowest.
+  const story =
+    typeof body.story === "number" && Number.isInteger(body.story) && Math.abs(body.story) <= 100
+      ? body.story
       : undefined;
   const sourceImageId = parseSourceImageId(body.sourceImageId);
   const captureId = sourceImageId === null ? parsePolycamCaptureId(body.url) : null;
@@ -125,11 +130,11 @@ export async function POST(request: Request) {
         const roomplan = parseRoomplan(await fetchRoomplan(id, { signal: request.signal }));
 
         send({ type: "status", message: "Ritar upp planen" });
-        const plan = await renderPlan(roomplan);
-        if (plan.storyCount > 1) {
+        const plan = await renderPlan(roomplan, { story });
+        if (plan.storyCount > 1 && story === undefined) {
           send({
             type: "status",
-            message: `Skanningen har ${plan.storyCount} våningar. Bara den första ritas.`,
+            message: `Skanningen har ${plan.storyCount} våningar. Bara den nedersta ritas.`,
           });
         }
 
