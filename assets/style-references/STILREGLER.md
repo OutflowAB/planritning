@@ -120,3 +120,23 @@ Bakgrund och färg:
 - Fyll hela bildytan ända ut till kanten med beigen. Lämna ingen vit marginal.
 - Rita ingen ram, ingen logotyp, ingen rubrik, ingen kompassros, ingen adress och ingen titelruta. Ram och logotyp läggs på i ett separat steg efteråt.
 <!-- PROMPT:END -->
+
+## Tillägg när källan är en 3D-skanning
+
+När planritningen kommer från en Polycam-skanning är den första bilden inte ett foto utan en
+plan som koden ritat upp ur skanningens väggdata: svarta väggar på vitt, glapp för dörrar och
+öppningar, vita rutor för fönster, ingen text. Blocket nedan läggs då till efter prompten
+ovan (och efter stilreferensstycket), så att det väger tyngst. För foton skickas det aldrig.
+
+<!-- SCAN-PROMPT:START -->
+Om den första bilden: den är inte ett foto utan en exakt planritning sedd rakt uppifrån, uppritad ur en 3D-skanning av bostaden. Den är redan rak och i rätt skala.
+- Svarta fält är väggar. Behåll varje väggs läge, längd, vinkel och proportioner exakt. Flytta, förläng, räta ut eller förenkla ingenting.
+- Breda svarta väggar är ytterväggar och smala är innerväggar. Behåll den skillnaden.
+- En tunn enkel linje är ett räcke runt balkong eller altan. Rita den som en tunn kontur, inte som en vägg.
+- Vita glapp i väggarna är dörrar och öppningar. Ett glapp med en tunn kvartscirkel är en dörr; rita den som en dörr i vår stil. Ett glapp utan kvartscirkel är en öppning utan dörr.
+- En vit rektangel med tunn kontur i väggen är ett fönster.
+- Där skanningen saknar en vägg ska det inte stå någon vägg. Hitta inte på väggar, rum, dörrar eller fönster som inte finns i bilden.
+- Bilden innehåller ingen text. Skriv därför inga rumsnamn, inga förkortningar och ingen annan text alls.
+- Rita ingen inredning, inga vitvaror och inga trappor, eftersom skanningen inte visar dem.
+- Rita ingen entrépil, eftersom entrén inte går att avgöra ur skanningen.
+<!-- SCAN-PROMPT:END -->

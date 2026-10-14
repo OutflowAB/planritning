@@ -42,6 +42,14 @@ const STYLE_RULES_FILE = path.join(STYLE_REFERENCE_DIR, "STILREGLER.md");
 const PROMPT_START_MARKER = "<!-- PROMPT:START -->";
 const PROMPT_END_MARKER = "<!-- PROMPT:END -->";
 
+/**
+ * Sent only when the source is a plan drawn from a 3D scan. The house rules above are written
+ * for photos of paper plans; this block tells the model what the scan drawing's marks mean
+ * and that its geometry is already exact.
+ */
+const SCAN_PROMPT_START_MARKER = "<!-- SCAN-PROMPT:START -->";
+const SCAN_PROMPT_END_MARKER = "<!-- SCAN-PROMPT:END -->";
+
 /** Used only when STILREGLER.md is missing or has lost its markers. */
 const FALLBACK_PROMPT = `Rita om planritningen i den första bilden som en ren, teknisk linjeritning.
 
@@ -51,6 +59,9 @@ const FALLBACK_PROMPT = `Rita om planritningen i den första bilden som en ren, 
 - Rita dörrar som ett glapp i väggen plus en tunn kvartscirkel som visar svepet.
 - Måla hela bakgrunden i exakt #E1D5C9, linjer och text i #000000, fönster i #FFFFFF. Inga andra färger, inga gråtoner och ingen skuggning.
 - Rita ingen ram, ingen logotyp, ingen rubrik, ingen kompassros och ingen adress.`;
+
+/** Used only when STILREGLER.md is missing or has lost its scan markers. */
+const FALLBACK_SCAN_PROMPT = `Om den första bilden: den är inte ett foto utan en exakt planritning sedd rakt uppifrån, uppritad ur en 3D-skanning. Svarta fält är väggar i rätt skala och läge; behåll dem exakt. Vita glapp är dörrar och öppningar, vita rektanglar med tunn kontur är fönster. Hitta inte på väggar, rum eller inredning. Skriv ingen text alls.`;
 
 const STYLE_REFERENCE_PROMPT = `
 
@@ -70,6 +81,9 @@ export type AiFloorplanUsage = {
   totalTokens: number;
 };
 
+/** What the first image is: a photo of a paper plan, or a plan drawn from a 3D scan. */
+export type FloorplanSourceKind = "photo" | "scan";
+
 export type GenerateFloorplanLineArtOptions = {
   /** The oriented source photo. The result is returned at exactly these dimensions. */
   sourceImage: Buffer;
@@ -79,6 +93,8 @@ export type GenerateFloorplanLineArtOptions = {
   feedback?: string;
   /** Overrides the configured model. Used to retry a rejected result a different way. */
   model?: string;
+  /** Defaults to a photo, whose prompt is exactly what it was before scans existed. */
+  sourceKind?: FloorplanSourceKind;
   signal?: AbortSignal;
 };
 
@@ -96,6 +112,7 @@ export type GenerateFloorplanLineArtResult = {
 
 let cachedStyleReferences: StyleReference[] | null = null;
 let cachedStyleRules: string | null = null;
+let cachedScanRules: string | null = null;
 
 /**
  * Reads the prompted section of STILREGLER.md once per server instance. Falls back to a
@@ -126,6 +143,34 @@ export async function loadStyleRules(): Promise<string> {
 
   cachedStyleRules = FALLBACK_PROMPT;
   return cachedStyleRules;
+}
+
+/** The scan block of STILREGLER.md, read once per server instance like the main rules. */
+export async function loadScanRules(): Promise<string> {
+  if (cachedScanRules) {
+    return cachedScanRules;
+  }
+
+  try {
+    const markdown = await readFile(STYLE_RULES_FILE, "utf8");
+    const start = markdown.indexOf(SCAN_PROMPT_START_MARKER);
+    const end = markdown.indexOf(SCAN_PROMPT_END_MARKER);
+
+    if (start !== -1 && end > start) {
+      const rules = markdown.slice(start + SCAN_PROMPT_START_MARKER.length, end).trim();
+      if (rules.length > 0) {
+        cachedScanRules = rules;
+        return cachedScanRules;
+      }
+    }
+
+    console.warn("STILREGLER.md saknar SCAN-PROMPT-markörer, använder inbyggd skanningsprompt.");
+  } catch {
+    console.warn("STILREGLER.md kunde inte läsas, använder inbyggd skanningsprompt.");
+  }
+
+  cachedScanRules = FALLBACK_SCAN_PROMPT;
+  return cachedScanRules;
 }
 
 export function isAiEngineConfigured() {
@@ -254,6 +299,7 @@ export async function generateFloorplanLineArt({
   sourceHeight,
   feedback,
   model: modelOverride,
+  sourceKind = "photo",
   signal,
 }: GenerateFloorplanLineArtOptions): Promise<GenerateFloorplanLineArtResult> {
   const client = createClient();
@@ -280,8 +326,12 @@ export async function generateFloorplanLineArt({
     )),
   ];
 
-  const basePrompt =
+  const stylePrompt =
     styleReferences.length > 0 ? `${styleRules}${STYLE_REFERENCE_PROMPT}` : styleRules;
+  // After the house rules, so it overrides their photo-specific parts (labels to keep, noise
+  // to remove); before any feedback, which stays last.
+  const basePrompt =
+    sourceKind === "scan" ? `${stylePrompt}\n\n${await loadScanRules()}` : stylePrompt;
 
   // Placed last so it reads as a correction to everything above it.
   const prompt = feedback
