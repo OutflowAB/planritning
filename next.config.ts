@@ -6,6 +6,7 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/convert": ["./assets/style-references/**/*", "./assets/fonts/**/*"],
     "/api/convert-polycam": ["./assets/style-references/**/*", "./assets/fonts/**/*"],
+    "/api/recompose-sheet": ["./assets/fonts/**/*"],
     "/api/compare-before": ["./assets/fonts/**/*"],
   },
 };

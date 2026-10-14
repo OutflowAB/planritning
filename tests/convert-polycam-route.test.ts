@@ -224,7 +224,11 @@ describe("POST /api/convert-polycam", () => {
       value && typeof value === "object"
         ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, shape(inner)]))
         : typeof value;
-    expect(shape(scanDone)).toEqual(shape(photoDone));
+    // The compass block differs by design: a scan knows its direction, a photo does not.
+    const { compass: scanCompass, ...scanRest } = scanDone;
+    const { compass: photoCompass, ...photoRest } = photoDone;
+    expect(Object.keys(scanCompass ?? {})).toEqual(Object.keys(photoCompass ?? {}));
+    expect(shape(scanRest)).toEqual(shape(photoRest));
   });
 
   it.each([
@@ -279,8 +283,11 @@ describe("POST /api/convert-polycam", () => {
     expect(done.sourceImageId).toBe(42);
     const call = mocks.generate.mock.calls[0][0];
     expect(call).toMatchObject({ sourceKind: "scan", feedback: "Större fönster.", sourceWidth: 600 });
-    // The source is reused, not stored again: only the result and its thumbnail are uploaded.
-    expect(fake.calls.filter((entry) => entry.op === "upload")).toHaveLength(2);
+    // The source is reused, not stored again: only the result, its thumbnail and
+    // the raw drawing with its settings (for the compass control) are uploaded.
+    const uploads = fake.calls.filter((entry) => entry.op === "upload").map((entry) => String(entry.payload));
+    expect(uploads).toHaveLength(4);
+    expect(uploads.some((upload) => upload.startsWith("uploads/"))).toBe(false);
   });
 
   it.each([

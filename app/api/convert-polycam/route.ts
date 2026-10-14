@@ -12,6 +12,7 @@ import { parseRoomplan } from "@/lib/polycam/parse-roomplan";
 import { compassRotationFromScan } from "@/lib/polycam/compass";
 import { renderPlan } from "@/lib/polycam/render-plan";
 import { parsePolycamCaptureId, polycamCaptureUrl } from "@/lib/polycam/url";
+import { normaliseRotation, parseCompassSettings } from "@/lib/image/compass-settings";
 import { requireRole } from "@/lib/server-auth";
 import {
   BUCKET_NAME,
@@ -73,6 +74,8 @@ export async function POST(request: Request) {
     typeof body.story === "number" && Number.isInteger(body.story) && Math.abs(body.story) <= 100
       ? body.story
       : undefined;
+  // The broker's compass choice for this run; absent or malformed falls back to the scan's.
+  const compass = parseCompassSettings(body.compass);
   const sourceImageId = parseSourceImageId(body.sourceImageId);
   const captureId = sourceImageId === null ? parsePolycamCaptureId(body.url) : null;
 
@@ -120,8 +123,11 @@ export async function POST(request: Request) {
   return createConversionStream(async (send) => {
     let inputBuffer: Buffer;
     let source: ConversionSource;
-    // Only a fresh scan carries a direction; a redraw from a stored plan image does not.
-    let compassRotationDegrees: number | null = null;
+    // A fresh scan carries its direction; a redraw from the stored plan image is told it.
+    let scanRotationDegrees: number | null =
+      typeof body.scanRotation === "number" && Number.isFinite(body.scanRotation)
+        ? normaliseRotation(body.scanRotation)
+        : null;
 
     if (storedSource) {
       inputBuffer = storedSource.buffer;
@@ -156,7 +162,7 @@ export async function POST(request: Request) {
         );
 
         inputBuffer = plan.png;
-        compassRotationDegrees = compassRotationFromScan(
+        scanRotationDegrees = compassRotationFromScan(
           roomplan.orientationDegrees,
           roomplan.alignment,
         );
@@ -180,7 +186,8 @@ export async function POST(request: Request) {
       source,
       feedback,
       sourceKind: "scan",
-      compassRotationDegrees,
+      scanRotationDegrees,
+      compass,
       signal: request.signal,
       send,
     });
