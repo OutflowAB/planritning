@@ -1,7 +1,7 @@
 "use client";
 
 import { Check } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 
 import { storeyProgressText } from "@/lib/storey-floors";
 
@@ -17,10 +17,13 @@ type StoreyPickerProps = {
   storeys: StoreyOption[];
   onConfirm: (stories: number[]) => void;
   onCancel: () => void;
+  /** The compass control, shown above the buttons so it is settled before anything is billed. */
+  compass?: ReactNode;
 };
 
 /** Shown before any image is generated, so only the floors the user wants are billed. */
-export function StoreyPicker({ storeys, onConfirm, onCancel }: StoreyPickerProps) {
+export function StoreyPicker({ storeys, onConfirm, onCancel, compass }: StoreyPickerProps) {
+  const single = storeys.length === 1;
   const [selected, setSelected] = useState<number[]>(() => storeys.map((s) => s.story));
   const allSelected = selected.length === storeys.length;
 
@@ -33,8 +36,11 @@ export function StoreyPicker({ storeys, onConfirm, onCancel }: StoreyPickerProps
   return (
     <div className="space-y-3 border border-[#d8d2c8] bg-[#f7f4ef] p-4">
       <p className="text-sm font-medium text-[#5c544a]">
-        Skanningen har {storeys.length} våningar. Vilka vill du rita?
+        {single
+          ? "Skanningen är läst. Kontrollera kompassen innan planen ritas."
+          : `Skanningen har ${storeys.length} våningar. Vilka vill du rita?`}
       </p>
+      {single ? null : (
       <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-[#4d463f]">
         <input
           type="checkbox"
@@ -44,7 +50,8 @@ export function StoreyPicker({ storeys, onConfirm, onCancel }: StoreyPickerProps
         />
         Alla våningar
       </label>
-      <ul className="space-y-1.5">
+      )}
+      <ul className={single ? "hidden" : "space-y-1.5"}>
         {storeys.map((storey, index) => (
           <li key={storey.story}>
             <label className="flex cursor-pointer items-center gap-2 border border-[#e8e2d8] bg-white px-3 py-2 text-sm text-[#4d463f]">
@@ -62,7 +69,10 @@ export function StoreyPicker({ storeys, onConfirm, onCancel }: StoreyPickerProps
           </li>
         ))}
       </ul>
-      <p className="text-xs text-[#7b746a]">Varje vald våning är en egen konvertering.</p>
+      {compass}
+      {single ? null : (
+        <p className="text-xs text-[#7b746a]">Varje vald våning är en egen konvertering.</p>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <button
           type="button"
@@ -77,7 +87,9 @@ export function StoreyPicker({ storeys, onConfirm, onCancel }: StoreyPickerProps
           onClick={() => onConfirm(storeys.map((s) => s.story).filter((s) => selected.includes(s)))}
           className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Konvertera {selected.length === 1 ? "1 våning" : `${selected.length} våningar`}
+          {single
+            ? "Konvertera"
+            : `Konvertera ${selected.length === 1 ? "1 våning" : `${selected.length} våningar`}`}
         </button>
       </div>
     </div>

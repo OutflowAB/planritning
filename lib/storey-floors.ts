@@ -33,3 +33,24 @@ export function markFloor(floors: StoreyFloor[], index: number, status: FloorSta
 export function replaceFloor(floors: StoreyFloor[], index: number, conversion: ConvertDoneEvent) {
   return floors.map((floor, i) => (i === index ? { ...floor, conversion, status: "redone" as const } : floor));
 }
+
+/** The version tag in a saved image URL (`v=`), so a re-composed floor's thumbnail is fetched anew. */
+export function savedImageVersion(savedImageUrl: string | null | undefined) {
+  if (!savedImageUrl) {
+    return null;
+  }
+  try {
+    return new URL(savedImageUrl, "http://local").searchParams.get("v");
+  } catch {
+    return null;
+  }
+}
+
+/** A floor whose sheet was composed again: same floor, new picture. */
+export function updateFloorImage(floors: StoreyFloor[], savedImageId: number, savedImageUrl: string) {
+  return floors.map((floor) =>
+    floor.conversion.savedImageId === savedImageId
+      ? { ...floor, conversion: { ...floor.conversion, savedImageUrl } }
+      : floor,
+  );
+}

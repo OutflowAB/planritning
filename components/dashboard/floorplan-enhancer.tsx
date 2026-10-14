@@ -20,6 +20,7 @@ import { createPortal } from "react-dom";
 import {
   areCompareImagesCached,
   ImageCompareSlider,
+  preloadCompareImageSrc,
   warmCompareImageCache,
   warmCompareImageSrc,
 } from "@/components/dashboard/image-compare-slider";
@@ -31,6 +32,7 @@ import { FloorplanDrawingAnimation } from "@/components/dashboard/floorplan-draw
 import { useToast } from "@/components/ui/toast-provider";
 import {
   readConvertStream,
+  type ConvertCompass,
   type ConvertDoneEvent,
   type ConvertLayout,
 } from "@/lib/floorplan/convert-stream";
@@ -59,7 +61,9 @@ import {
 import { ApiError, apiFetch, apiJson } from "@/lib/api-client";
 import { StoreyGallery } from "@/components/dashboard/storey-gallery";
 import { StoreyPicker, StoreyProgress, storeyLabel, type StoreyOption } from "@/components/dashboard/storey-picker";
-import { markFloor, nextPendingFloor, replaceFloor, type StoreyFloor } from "@/lib/storey-floors";
+import { markFloor, nextPendingFloor, replaceFloor, updateFloorImage, type StoreyFloor } from "@/lib/storey-floors";
+import { CompassControl } from "@/components/dashboard/compass-control";
+import { defaultCompass, type CompassSettings } from "@/lib/image/compass-settings";
 import { dispatchGenerationUpdated } from "@/lib/app-events";
 import { imageUrl } from "@/lib/image-url";
 import type { ImageListItem } from "@/app/api/images/route";
@@ -520,6 +524,23 @@ function ComparePreviewSkeleton({ showWatermark = false }: { showWatermark?: boo
   );
 }
 
+/** The compass of one stored sheet as the review knows it. */
+type SheetCompassState = {
+  settings: CompassSettings;
+  /** The last choice the server composed, to fall back to if a change fails. */
+  saved: CompassSettings;
+  scanRotation: number | null;
+  adjustable: boolean;
+  reason?: string;
+};
+
+const COMPASS_DEBOUNCE_MS = 450;
+
+function sheetCompassFromConversion(compass: ConvertCompass): SheetCompassState {
+  const settings = { visible: compass.visible, rotation: compass.rotation };
+  return { settings, saved: settings, scanRotation: compass.scanRotation, adjustable: compass.adjustable };
+}
+
 export function FloorplanEnhancer() {
   const router = useRouter();
   const pathname = usePathname();
@@ -574,6 +595,15 @@ export function FloorplanEnhancer() {
   const [storeyChoice, setStoreyChoice] = useState<{ url: string; storeys: StoreyOption[] } | null>(null);
   const [multiRun, setMultiRun] = useState<{ labels: string[]; done: number } | null>(null);
   const [floors, setFloors] = useState<StoreyFloor[]>([]);
+  // The compass choice made before drawing (one per run), and the compass of every sheet shown.
+  const [plannedCompass, setPlannedCompass] = useState<CompassSettings>(() => defaultCompass(null));
+  const [plannedScanRotation, setPlannedScanRotation] = useState<number | null>(null);
+  const [sheetCompass, setSheetCompass] = useState<Record<number, SheetCompassState>>({});
+  const [compassPending, setCompassPending] = useState(false);
+  const [compassEditedIds, setCompassEditedIds] = useState<number[]>([]);
+  const compassTimerRef = useRef<number | null>(null);
+  const compassChainRef = useRef<Promise<void>>(Promise.resolve());
+  const resultImageIdRef = useRef<number | null>(null);
   const [activeFloor, setActiveFloor] = useState<number | null>(null);
   const [previewImageType, setPreviewImageType] = useState<"source" | "result" | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
@@ -862,6 +892,45 @@ export function FloorplanEnhancer() {
     alignedSourcePreviewUrl && resultPreviewUrl && isCompareSliderReady,
   );
 
+  useEffect(() => {
+    resultImageIdRef.current = resultImageId;
+  }, [resultImageId]);
+
+  // A review restored from the session knows no compass yet: ask the server what the sheet has.
+  useEffect(() => {
+    if (!resultImageId || sheetCompass[resultImageId]) {
+      return;
+    }
+    let cancelled = false;
+    void apiJson<{
+      visible: boolean;
+      rotation: number;
+      scanRotation: number | null;
+      adjustable: boolean;
+      reason?: string;
+    }>(`/api/recompose-sheet?imageId=${resultImageId}`)
+      .then((state) => {
+        if (cancelled) {
+          return;
+        }
+        const settings = { visible: state.visible, rotation: state.rotation };
+        setSheetCompass((previous) => ({
+          ...previous,
+          [resultImageId]: {
+            settings,
+            saved: settings,
+            scanRotation: state.scanRotation,
+            adjustable: state.adjustable,
+            reason: state.reason,
+          },
+        }));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [resultImageId, sheetCompass]);
+
   const handleCompareSliderReadyChange = useCallback((ready: boolean) => {
     setIsCompareSliderReady(ready);
   }, []);
@@ -1060,6 +1129,9 @@ export function FloorplanEnhancer() {
       if (sourceImageId) {
         payload.append("sourceImageId", String(sourceImageId));
       }
+      const { compass } = requestCompass();
+      payload.append("compassVisible", compass.visible ? "1" : "0");
+      payload.append("compassRotation", String(compass.rotation));
       // Why the previous attempt was rejected. Sent along so the next version can correct it
       // rather than being a blind re-roll.
       if (feedback) {
@@ -1081,6 +1153,77 @@ export function FloorplanEnhancer() {
     }
   }
 
+  function rememberCompass(conversion: ConvertDoneEvent) {
+    const { compass, savedImageId } = conversion;
+    if (!compass) {
+      return;
+    }
+    setSheetCompass((previous) => ({ ...previous, [savedImageId]: sheetCompassFromConversion(compass) }));
+  }
+
+  /** The compass to draw a new version with: what the shown sheet has, else the planned one. */
+  function requestCompass(): { compass: CompassSettings; scanRotation: number | null } {
+    const current = resultImageId ? sheetCompass[resultImageId] : undefined;
+    return current
+      ? { compass: current.settings, scanRotation: current.scanRotation }
+      : { compass: plannedCompass, scanRotation: plannedScanRotation };
+  }
+
+  /**
+   * A change to the shown sheet's compass: the control updates at once, the sheet is composed
+   * again on the server after a short pause (no new drawing, no credit), and its new picture
+   * replaces the old one when it has loaded.
+   */
+  function changeSheetCompass(next: CompassSettings) {
+    const imageId = resultImageId;
+    if (!imageId) {
+      return;
+    }
+    setSheetCompass((previous) =>
+      previous[imageId] ? { ...previous, [imageId]: { ...previous[imageId], settings: next } } : previous,
+    );
+    setCompassPending(true);
+    if (compassTimerRef.current !== null) {
+      window.clearTimeout(compassTimerRef.current);
+    }
+    compassTimerRef.current = window.setTimeout(() => {
+      compassTimerRef.current = null;
+      compassChainRef.current = compassChainRef.current.then(async () => {
+        try {
+          const result = await apiJson<{ savedImageUrl: string }>("/api/recompose-sheet", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ imageId, compass: next }),
+          });
+          await preloadCompareImageSrc(result.savedImageUrl).catch(() => undefined);
+          setSheetCompass((previous) =>
+            previous[imageId] ? { ...previous, [imageId]: { ...previous[imageId], saved: next } } : previous,
+          );
+          setCompassEditedIds((previous) => (previous.includes(imageId) ? previous : [...previous, imageId]));
+          setFloors((previous) => updateFloorImage(previous, imageId, result.savedImageUrl));
+          if (resultImageIdRef.current === imageId) {
+            setResultPreviewUrl(result.savedImageUrl);
+            const pending = getPendingGenerationReview();
+            if (pending?.resultImageId === imageId) {
+              setPendingGenerationReview({ ...pending, resultPreviewUrl: result.savedImageUrl });
+            }
+          }
+        } catch (error) {
+          setSheetCompass((previous) =>
+            previous[imageId]
+              ? { ...previous, [imageId]: { ...previous[imageId], settings: previous[imageId].saved } }
+              : previous,
+          );
+          setErrorMessage(error instanceof Error ? error.message : "Kunde inte ändra kompassen.");
+        } finally {
+          if (compassTimerRef.current === null) {
+            setCompassPending(false);
+          }
+        }
+      });
+    }, COMPASS_DEBOUNCE_MS);
+  }
+
   /** Shows a finished conversion for review and caches it, whichever route produced it. */
   function applyConversionResult(
     conversion: ConvertDoneEvent,
@@ -1089,6 +1232,7 @@ export function FloorplanEnhancer() {
   ) {
     const parsedSavedImageId = conversion.savedImageId;
     const parsedSourceImageId = conversion.sourceImageId;
+    rememberCompass(conversion);
     const savedImagePath = conversion.savedImagePath;
     if (parsedSourceImageId) {
       setSourceImageId(parsedSourceImageId);
@@ -1247,7 +1391,7 @@ export function FloorplanEnhancer() {
         const response = await apiFetch("/api/convert-polycam", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url, story }),
+          body: JSON.stringify({ url, story, compass: plannedCompass }),
         });
         results.push(
           await readConvertStream(response, {
@@ -1271,6 +1415,7 @@ export function FloorplanEnhancer() {
     }
 
     const [first] = results;
+    results.forEach(rememberCompass);
     if (first) {
       setFloors(
         results.map((conversion, index) => ({
@@ -1289,16 +1434,18 @@ export function FloorplanEnhancer() {
     setErrorMessage("");
     setIsInspecting(true);
     try {
-      const { storeys } = await apiJson<{ storeys: StoreyOption[] }>("/api/convert-polycam/inspect", {
+      const { storeys, compassRotation } = await apiJson<{
+        storeys: StoreyOption[];
+        compassRotation: number | null;
+      }>("/api/convert-polycam/inspect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: link }),
       });
-      if (storeys.length > 1) {
-        setStoreyChoice({ url: link, storeys });
-      } else {
-        void processPolycamLink({ url: link });
-      }
+      // Both the compass and (for several floors) the floors are settled before anything is drawn.
+      setPlannedScanRotation(compassRotation ?? null);
+      setPlannedCompass(defaultCompass(compassRotation ?? null));
+      setStoreyChoice({ url: link, storeys });
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
     } finally {
@@ -1318,6 +1465,7 @@ export function FloorplanEnhancer() {
       return;
     }
 
+    setStoreyChoice(null);
     // A redraw of one floor of a multi-storey run keeps its place in the gallery.
     const redoIndex = "sourceImageId" in target ? activeFloor : null;
     if (redoIndex === null) {
@@ -1333,7 +1481,15 @@ export function FloorplanEnhancer() {
       const response = await apiFetch("/api/convert-polycam", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...target, ...(feedback ? { feedback } : {}) }),
+        body: JSON.stringify({
+          ...target,
+          ...(feedback ? { feedback } : {}),
+          // A redraw keeps the sheet's compass; a fresh link uses what was chosen before drawing.
+          compass: requestCompass().compass,
+          ...("sourceImageId" in target && requestCompass().scanRotation !== null
+            ? { scanRotation: requestCompass().scanRotation }
+            : {}),
+        }),
       });
 
       const conversion = await readConvertStream(response, {
@@ -1735,8 +1891,17 @@ export function FloorplanEnhancer() {
             <StoreyPicker
               storeys={storeyChoice.storeys}
               onCancel={() => setStoreyChoice(null)}
+              compass={
+                <CompassControl
+                  value={plannedCompass}
+                  defaultValue={defaultCompass(plannedScanRotation)}
+                  onChange={setPlannedCompass}
+                />
+              }
               onConfirm={(stories) =>
-                void processPolycamStoreys(storeyChoice.url, stories, storeyChoice.storeys)
+                storeyChoice.storeys.length === 1
+                  ? void processPolycamLink({ url: storeyChoice.url })
+                  : void processPolycamStoreys(storeyChoice.url, stories, storeyChoice.storeys)
               }
             />
           ) : null}
@@ -1817,7 +1982,15 @@ export function FloorplanEnhancer() {
                 onClick={openSourcePreview}
                 className="h-auto w-auto max-h-[min(60vh,640px)] max-w-full cursor-zoom-in bg-white"
               />
-              <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+              <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-3 pt-3 leading-normal">
+                <CompassControl
+                  value={plannedCompass}
+                  defaultValue={defaultCompass(isScanSource ? plannedScanRotation : null)}
+                  onChange={setPlannedCompass}
+                  disabled={isSubmitting}
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2 bg-[#f7f4ef] px-4 py-3">
                 {errorMessage ? (
                   <button
                     type="button"
@@ -1879,7 +2052,22 @@ export function FloorplanEnhancer() {
                   protectAfterImage={protectResultPreview}
                   loadingFallback={<ComparePreviewSkeleton showWatermark={protectResultPreview} />}
                   onReadyChange={handleCompareSliderReadyChange}
+                  playEntranceAnimation={!resultImageId || !compassEditedIds.includes(resultImageId)}
                 />
+              ) : null}
+              {isCompareReviewReady && resultImageId && sheetCompass[resultImageId] ? (
+                <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-3 py-3 leading-normal">
+                  <CompassControl
+                    value={sheetCompass[resultImageId].settings}
+                    defaultValue={defaultCompass(sheetCompass[resultImageId].scanRotation)}
+                    onChange={changeSheetCompass}
+                    disabled={isReviewSubmitting}
+                    unavailableReason={
+                      sheetCompass[resultImageId].adjustable ? null : sheetCompass[resultImageId].reason ?? null
+                    }
+                    busy={compassPending}
+                  />
+                </div>
               ) : null}
               {isCompareReviewReady && alignedSourcePreviewUrl && showRejectForm ? (
                 <div className="space-y-3 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4">
