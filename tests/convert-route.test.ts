@@ -120,6 +120,7 @@ describe("POST /api/convert", () => {
     expect(Object.keys(done).sort()).toEqual(
       [
         "compareBefore",
+        "compass",
         "engine",
         "layout",
         "result",
@@ -159,7 +160,7 @@ describe("POST /api/convert", () => {
     );
 
     expect(done.sourceImageId).toBe(7);
-    expect(fake.calls.filter((call) => call.op === "upload")).toHaveLength(2); // result + thumbnail
+    expect(fake.calls.filter((call) => call.op === "upload")).toHaveLength(4); // result, thumbnail, raw drawing and its settings
     expect(mocks.generate.mock.calls[0][0].feedback).toBe("tjockare väggar");
   });
 
