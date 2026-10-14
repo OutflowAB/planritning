@@ -29,7 +29,11 @@ import {
 } from "@/components/dashboard/watermark-overlay";
 import { FloorplanDrawingAnimation } from "@/components/dashboard/floorplan-drawing-animation";
 import { useToast } from "@/components/ui/toast-provider";
-import { readConvertStream, type ConvertLayout } from "@/lib/floorplan/convert-stream";
+import {
+  readConvertStream,
+  type ConvertDoneEvent,
+  type ConvertLayout,
+} from "@/lib/floorplan/convert-stream";
 import {
   imageDisplayName,
   resolveImageDownloadFileName,
@@ -62,6 +66,8 @@ import {
 } from "@/lib/verktyg-save-session";
 
 const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+/** Only a coarse check; the server parses the link strictly and never fetches it as given. */
+const POLYCAM_LINK_PREFIX = /^https:\/\/poly\.cam\//i;
 const UPLOADS_PREFIX = "uploads/";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
@@ -396,6 +402,7 @@ function readCachedReviewPreviewState() {
       sourcePreviewUrl: null as string | null,
       resultPreviewUrl: null as string | null,
       alignedSourcePreviewUrl: null as string | null,
+      isScanSource: false,
     };
   }
 
@@ -422,6 +429,7 @@ function readCachedReviewPreviewState() {
     sourcePreviewUrl,
     resultPreviewUrl,
     alignedSourcePreviewUrl,
+    isScanSource: pendingReview.sourceKind === "scan",
   };
 }
 
@@ -552,6 +560,10 @@ export function FloorplanEnhancer() {
   const [sourceImageId, setSourceImageId] = useState<number | null>(() =>
     readInitialSourceImageId(cachedReviewPreview, cachedSourcePreview),
   );
+  // The source is a plan drawn from a Polycam scan: redraws go back through the scan route,
+  // which reuses the stored plan and tells the model what it is looking at.
+  const [isScanSource, setIsScanSource] = useState(() => cachedReviewPreview.isScanSource);
+  const [polycamLink, setPolycamLink] = useState("");
   const [previewImageType, setPreviewImageType] = useState<"source" | "result" | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [isCompareSliderReady, setIsCompareSliderReady] = useState(() =>
@@ -593,6 +605,7 @@ export function FloorplanEnhancer() {
   const applyTransferredSource = useCallback(
     (transferredSource: ConverterTransferPayload) => {
       setErrorMessage("");
+      setIsScanSource(false);
       setSourceImageId(
         typeof transferredSource.uploadId === "number" ? transferredSource.uploadId : null,
       );
@@ -648,6 +661,7 @@ export function FloorplanEnhancer() {
   function resetSourceSelection() {
     clearPendingSourceSelection();
     setErrorMessage("");
+    setIsScanSource(false);
     setIsSubmitting(false);
     setSourceFile(null);
     setSourceImageId(null);
@@ -961,6 +975,7 @@ export function FloorplanEnhancer() {
     }
 
     setErrorMessage("");
+    setIsScanSource(false);
     setSourceFile(file);
     setSourceImageId(null);
     setSourcePreviewUrl((prev) => {
@@ -1036,35 +1051,7 @@ export function FloorplanEnhancer() {
         onStatus: (event) => setProcessingStatusMessage(event.message),
       });
 
-      const parsedSavedImageId = conversion.savedImageId;
-      const parsedSourceImageId = conversion.sourceImageId;
-      const savedImagePath = conversion.savedImagePath;
-      if (parsedSourceImageId) {
-        setSourceImageId(parsedSourceImageId);
-      }
-      setResultImageId(parsedSavedImageId);
-      setResultImagePath(savedImagePath);
-      const compareBeforeDataUrl = conversion.compareBefore;
-      setAlignedSourcePreviewUrl(compareBeforeDataUrl);
-      const nextResultPreviewUrl = conversion.savedImageUrl || conversion.result;
-      warmCompareImageCache(compareBeforeDataUrl, nextResultPreviewUrl);
-      setResultPreviewUrl((prev) => {
-        revokeIfObjectUrl(prev);
-        return nextResultPreviewUrl;
-      });
-      if (parsedSavedImageId && savedImagePath && parsedSourceImageId) {
-        clearPendingSourceSelection();
-        setPendingGenerationReview({
-          resultImageId: parsedSavedImageId,
-          resultImagePath: savedImagePath,
-          sourceImageId: parsedSourceImageId,
-          compareBeforePreviewUrl: compareBeforeDataUrl,
-          sourcePreviewUrl: sourcePreviewUrl ?? undefined,
-          resultPreviewUrl: nextResultPreviewUrl,
-          layout: conversion.layout,
-        });
-      }
-      dispatchGenerationUpdated();
+      applyConversionResult(conversion, sourcePreviewUrl ?? undefined);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
     } finally {
@@ -1073,8 +1060,109 @@ export function FloorplanEnhancer() {
     }
   }
 
+  /** Shows a finished conversion for review and caches it, whichever route produced it. */
+  function applyConversionResult(
+    conversion: ConvertDoneEvent,
+    reviewSourcePreviewUrl: string | undefined,
+    sourceKind?: "scan",
+  ) {
+    const parsedSavedImageId = conversion.savedImageId;
+    const parsedSourceImageId = conversion.sourceImageId;
+    const savedImagePath = conversion.savedImagePath;
+    if (parsedSourceImageId) {
+      setSourceImageId(parsedSourceImageId);
+    }
+    setResultImageId(parsedSavedImageId);
+    setResultImagePath(savedImagePath);
+    const compareBeforeDataUrl = conversion.compareBefore;
+    setAlignedSourcePreviewUrl(compareBeforeDataUrl);
+    const nextResultPreviewUrl = conversion.savedImageUrl || conversion.result;
+    warmCompareImageCache(compareBeforeDataUrl, nextResultPreviewUrl);
+    setResultPreviewUrl((prev) => {
+      revokeIfObjectUrl(prev);
+      return nextResultPreviewUrl;
+    });
+    if (parsedSavedImageId && savedImagePath && parsedSourceImageId) {
+      clearPendingSourceSelection();
+      setPendingGenerationReview({
+        resultImageId: parsedSavedImageId,
+        resultImagePath: savedImagePath,
+        sourceImageId: parsedSourceImageId,
+        compareBeforePreviewUrl: compareBeforeDataUrl,
+        sourcePreviewUrl: reviewSourcePreviewUrl,
+        resultPreviewUrl: nextResultPreviewUrl,
+        layout: conversion.layout,
+        ...(sourceKind ? { sourceKind } : {}),
+      });
+    }
+    dispatchGenerationUpdated();
+  }
+
+  /**
+   * Converts a Polycam capture. With a link, the server downloads and draws the scan; with
+   * the id of a plan it drew before (a redraw), it reuses that plan without Polycam.
+   */
+  async function processPolycamLink(
+    target: { url: string } | { sourceImageId: number },
+    feedback?: string,
+  ) {
+    if (isSubmitting) {
+      return;
+    }
+
+    setErrorMessage("");
+    setIsSubmitting(true);
+    setProcessingStatusMessage(null);
+
+    try {
+      const response = await apiFetch("/api/convert-polycam", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...target, ...(feedback ? { feedback } : {}) }),
+      });
+
+      const conversion = await readConvertStream(response, {
+        onStatus: (event) => setProcessingStatusMessage(event.message),
+      });
+
+      // There is no local file: the plan the server drew from the scan is the original.
+      const scanPreviewUrl = imageUrl(conversion.sourceImageId, "full");
+      setSourceFile(null);
+      setSourcePreviewUrl((previous) => {
+        if (previous === scanPreviewUrl) {
+          return previous;
+        }
+        revokeIfObjectUrl(previous);
+        return scanPreviewUrl;
+      });
+      setIsScanSource(true);
+      setPolycamLink("");
+      applyConversionResult(conversion, scanPreviewUrl, "scan");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
+    } finally {
+      setIsSubmitting(false);
+      setProcessingStatusMessage(null);
+    }
+  }
+
+  function submitPolycamLink() {
+    const link = polycamLink.trim();
+    if (!POLYCAM_LINK_PREFIX.test(link)) {
+      setErrorMessage("Länken måste börja med https://poly.cam/.");
+      return;
+    }
+
+    void processPolycamLink({ url: link });
+  }
+
   function startConversion() {
     if (isSubmitting) {
+      return;
+    }
+
+    if (isScanSource && sourceImageId) {
+      void processPolycamLink({ sourceImageId });
       return;
     }
 
@@ -1167,7 +1255,11 @@ export function FloorplanEnhancer() {
       showToast("Konverterar bilden på nytt med din kommentar.");
       dispatchGenerationUpdated();
       setIsReviewSubmitting(false);
-      void processImage(undefined, trimmedComment);
+      if (isScanSource && sourceImageId) {
+        void processPolycamLink({ sourceImageId }, trimmedComment);
+      } else {
+        void processImage(undefined, trimmedComment);
+      }
       return;
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
@@ -1421,6 +1513,44 @@ export function FloorplanEnhancer() {
               </p>
               <p className="mt-2 text-xs text-[#7b746a]">Stöd: PNG, JPG, WEBP</p>
             </label>
+          ) : null}
+
+          {showDropzone ? (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitPolycamLink();
+              }}
+              className="space-y-2"
+            >
+              <label htmlFor="polycam-link" className="block text-sm font-medium text-[#5c544a]">
+                Eller klistra in en Polycam-länk
+              </label>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  id="polycam-link"
+                  type="text"
+                  inputMode="url"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={polycamLink}
+                  onChange={(event) => setPolycamLink(event.target.value)}
+                  placeholder="https://poly.cam/capture/…"
+                  className="min-w-0 flex-1 rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm text-[#4d463f] placeholder:text-[#9a9288] focus:border-[#b8aea0] focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={isSubmitting || polycamLink.trim().length === 0}
+                  className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Hämta från Polycam
+                </button>
+              </div>
+              <p className="text-xs text-[#7b746a]">
+                Skanningen måste vara gjord i Polycams rums- eller planritningsläge och delad som
+                publik länk.
+              </p>
+            </form>
           ) : null}
 
           {errorMessage ? (

@@ -11,6 +11,8 @@ export type PendingGenerationReview = {
   resultPreviewUrl?: string;
   /** Where the drawing sits on the canvas, so the before image can be rebuilt to match. */
   layout?: ConvertLayout;
+  /** Set when the source is a plan drawn from a Polycam scan, so a redraw goes back there. */
+  sourceKind?: "scan";
 };
 
 function isConvertLayout(value: unknown): value is ConvertLayout {
@@ -60,6 +62,7 @@ export function getPendingGenerationReview(): PendingGenerationReview | null {
         ? { resultPreviewUrl: parsed.resultPreviewUrl }
         : {}),
       ...(isConvertLayout(parsed.layout) ? { layout: parsed.layout } : {}),
+      ...(parsed.sourceKind === "scan" ? { sourceKind: "scan" as const } : {}),
     };
   } catch {
     return null;
