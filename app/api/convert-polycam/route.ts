@@ -15,8 +15,8 @@ import { requireRole } from "@/lib/server-auth";
 import {
   BUCKET_NAME,
   getAdminSupabase,
+  SCAN_UPLOADS_PREFIX,
   serverConfigMissingResponse,
-  UPLOADS_PREFIX,
   UPLOADS_TABLE,
 } from "@/lib/supabase-server";
 
@@ -89,12 +89,13 @@ export async function POST(request: Request) {
       .eq("id", sourceImageId)
       .maybeSingle();
 
-    // Only a stored plan can be redrawn this way: every scan source is a PNG in uploads/.
+    // Only a plan this route drew can be redrawn: any other upload (a photo) would be sent to
+    // the model as a scan. Scan sources are PNGs stored under SCAN_UPLOADS_PREFIX.
     const isStoredPlan =
       !error &&
       row &&
       typeof row.file_path === "string" &&
-      row.file_path.startsWith(UPLOADS_PREFIX) &&
+      row.file_path.startsWith(SCAN_UPLOADS_PREFIX) &&
       row.mime_type === "image/png";
     const download = isStoredPlan
       ? await supabase.storage.from(BUCKET_NAME).download(row.file_path)

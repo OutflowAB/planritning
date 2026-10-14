@@ -68,6 +68,8 @@ export type RoomplanModel = {
 export const MAX_ELEMENTS = 2000;
 const MAX_ROOMS = 500;
 const MAX_ROOM_VERTICES = 1000;
+/** Per-room and room-count caps alone allow 500 x 1000 points; render-plan loops over all of them. */
+const MAX_TOTAL_ROOM_VERTICES = 20000;
 
 /** No dwelling is a kilometre across; larger values are corrupt and would wreck the scale. */
 const MAX_COORDINATE_M = 1000;
@@ -250,6 +252,7 @@ export function parseRoomplan(data: unknown): RoomplanModel {
   let skipped = 0;
 
   const walls: PlanWall[] = [];
+  const storyByWallId = new Map<string, number>();
   for (const rawWall of rawWalls) {
     const element = readElement(rawWall);
     if (!element) {
@@ -257,7 +260,11 @@ export function parseRoomplan(data: unknown): RoomplanModel {
       continue;
     }
     const { raw, ...wall } = element;
-    walls.push({ ...wall, id: readIdentifier(raw.identifier) });
+    const id = readIdentifier(raw.identifier);
+    walls.push({ ...wall, id });
+    if (id !== null) {
+      storyByWallId.set(id, wall.story);
+    }
   }
 
   const openings: PlanOpening[] = [];
@@ -269,19 +276,28 @@ export function parseRoomplan(data: unknown): RoomplanModel {
         continue;
       }
       const { raw, ...opening } = element;
+      const parentWallId = readIdentifier(raw.parentIdentifier);
       openings.push({
         ...opening,
+        // An opening belongs to the storey of the wall it sits in; its own `story` is often
+        // missing (read as 0), which dropped it whenever the walls were on another floor.
+        story: (parentWallId !== null ? storyByWallId.get(parentWallId) : undefined) ?? opening.story,
         kind,
-        parentWallId: readIdentifier(raw.parentIdentifier),
+        parentWallId,
         swing: kind === "door" ? readSwing(raw.door_swing_dir) : null,
       });
     }
   }
 
   const rooms: PlanRoom[] = [];
+  let totalVertices = 0;
   for (const rawRoom of rawRooms) {
     const room = readRoom(rawRoom);
     if (room) {
+      totalVertices += room.vertices.length;
+      if (totalVertices > MAX_TOTAL_ROOM_VERTICES) {
+        invalid();
+      }
       rooms.push(room);
     } else {
       skipped += 1;

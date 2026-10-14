@@ -328,10 +328,17 @@ export async function renderPlan(model: RoomplanModel): Promise<RenderedPlan> {
     if (opening.swing) outline.push(...sectorPath(opening.swing.sector));
   }
 
-  const minX = Math.min(...outline.map((p) => p.x));
-  const maxX = Math.max(...outline.map((p) => p.x));
-  const minZ = Math.min(...outline.map((p) => p.z));
-  const maxZ = Math.max(...outline.map((p) => p.z));
+  // A loop: spreading a large outline into Math.min/max overflows the call stack.
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const p of outline) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minZ = Math.min(minZ, p.z);
+    maxZ = Math.max(maxZ, p.z);
+  }
   const spanX = maxX - minX;
   const spanZ = maxZ - minZ;
   if (Math.max(spanX, spanZ) < 0.5) {

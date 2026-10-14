@@ -145,7 +145,7 @@ describe("POST /api/convert", () => {
     expect(generated?.source_upload_id).toBe(done.sourceImageId);
     expect(generated?.file_name).toBe(`bild-${done.savedImageId}.png`);
     expect(mocks.generate).toHaveBeenCalledTimes(1);
-    expect(mocks.generate.mock.calls[0][0]).not.toHaveProperty("sourceKind", "scan");
+    expect(mocks.generate.mock.calls[0][0]).toHaveProperty("sourceKind", "photo");
     // The source link column belongs to scans; a photo upload never touches it.
     expect(JSON.stringify(fake.calls)).not.toContain("source_url");
   });
