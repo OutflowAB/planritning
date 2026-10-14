@@ -23,6 +23,12 @@ import {
   type Rgb,
 } from "@/lib/image/brand-floorplan";
 import { imageUrl } from "@/lib/image-url";
+import {
+  compassRotationToDraw,
+  defaultCompass,
+  type CompassSettings,
+} from "@/lib/image/compass-settings";
+import { storeSheetSource } from "@/lib/image/sheet-source";
 import { createThumbnail, thumbnailPath } from "@/lib/image/thumbnail";
 import { getAdminSupabase, normaliseEtag, SCAN_UPLOADS_PREFIX } from "@/lib/supabase-server";
 
@@ -239,7 +245,9 @@ export type RunConversionOptions = {
   /** A plan drawn from a 3D scan gets its own prompt; everything else is a photo. */
   sourceKind?: FloorplanSourceKind;
   /** Where north points on the sheet (degrees clockwise from up). Only scans know it. */
-  compassRotationDegrees?: number | null;
+  scanRotationDegrees?: number | null;
+  /** The broker's choice; without it a scan shows its own direction and a photo no compass. */
+  compass?: CompassSettings | null;
   signal: AbortSignal;
   send: ConversionSend;
 };
@@ -253,10 +261,13 @@ export async function runConversion({
   source,
   feedback,
   sourceKind = "photo",
-  compassRotationDegrees = null,
+  scanRotationDegrees = null,
+  compass: requestedCompass = null,
   signal,
   send,
 }: RunConversionOptions) {
+  const compass = requestedCompass ?? defaultCompass(scanRotationDegrees);
+  const compassRotationDegrees = compassRotationToDraw(compass);
   const requestedEngine = resolveImageEngine();
 
   send({
@@ -507,6 +518,16 @@ export async function runConversion({
   } catch (thumbnailError) {
     console.error("Thumbnail generation failed after conversion", thumbnailError);
   }
+  // The raw drawing and the settings, so the compass can be changed later without drawing again.
+  const adjustable = await storeSheetSource(supabase, storagePath, drawingBuffer, {
+    version: 1,
+    engine: usedEngine,
+    sourceKind,
+    background: drawingBackground ?? null,
+    scanRotation: scanRotationDegrees,
+    compass,
+    outputSize: branded.output.byteLength,
+  }).catch(() => false);
   const savedImageUrl = imageUrl(insertedImage.id, "full", version);
 
   send({
@@ -516,6 +537,7 @@ export async function runConversion({
     savedImagePath: storagePath,
     savedImageUrl,
     sourceImageId: sourceUploadId,
+    compass: { ...compass, scanRotation: scanRotationDegrees, adjustable },
     compareBefore: await toJpegDataUrl(compareBeforeBuffer),
     // Only pay the base64 cost when the client has no signed URL to load instead.
     result: savedImageUrl ? "" : toPngDataUrl(branded.output),

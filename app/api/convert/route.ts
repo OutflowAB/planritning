@@ -5,6 +5,7 @@ import {
   parseSourceImageId,
   runConversion,
 } from "@/lib/floorplan/run-conversion";
+import { parseCompassFormFields } from "@/lib/image/compass-settings";
 import { requireRole } from "@/lib/server-auth";
 
 export const runtime = "nodejs";
@@ -46,6 +47,7 @@ export async function POST(request: Request) {
         sourceImageId: parseSourceImageId(sourceImageIdValue),
       },
       feedback,
+      compass: parseCompassFormFields(formData.get("compassVisible"), formData.get("compassRotation")),
       signal: request.signal,
       send,
     }),
