@@ -63,6 +63,7 @@ import { StoreyGallery } from "@/components/dashboard/storey-gallery";
 import { StoreyPicker, StoreyProgress, storeyLabel, type StoreyOption } from "@/components/dashboard/storey-picker";
 import { markFloor, nextPendingFloor, replaceFloor, updateFloorImage, type StoreyFloor } from "@/lib/storey-floors";
 import { CompassControl } from "@/components/dashboard/compass-control";
+import { newFloorRun, parseFloorGroup } from "@/lib/floor-groups";
 import { defaultCompass, type CompassSettings } from "@/lib/image/compass-settings";
 import { dispatchGenerationUpdated } from "@/lib/app-events";
 import { imageUrl } from "@/lib/image-url";
@@ -1377,6 +1378,8 @@ export function FloorplanEnhancer() {
       ),
     );
     const results: ConvertDoneEvent[] = [];
+    // One id for the whole run, so the library can show these floors as one house.
+    const run = newFloorRun();
 
     setErrorMessage("");
     setStoreyChoice(null);
@@ -1391,7 +1394,16 @@ export function FloorplanEnhancer() {
         const response = await apiFetch("/api/convert-polycam", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url, story, compass: plannedCompass }),
+          body: JSON.stringify({
+            url,
+            story,
+            compass: plannedCompass,
+            floorGroup: {
+              run,
+              position: storeys.findIndex((entry) => entry.story === story),
+              total: storeys.length,
+            },
+          }),
         });
         results.push(
           await readConvertStream(response, {
@@ -1486,6 +1498,10 @@ export function FloorplanEnhancer() {
           ...(feedback ? { feedback } : {}),
           // A redraw keeps the sheet's compass; a fresh link uses what was chosen before drawing.
           compass: requestCompass().compass,
+          // A redrawn floor stays in its house.
+          ...(redoIndex !== null && parseFloorGroup(floors[redoIndex]?.conversion.savedImagePath)
+            ? { floorGroup: parseFloorGroup(floors[redoIndex]?.conversion.savedImagePath) }
+            : {}),
           ...("sourceImageId" in target && requestCompass().scanRotation !== null
             ? { scanRotation: requestCompass().scanRotation }
             : {}),

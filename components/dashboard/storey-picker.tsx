@@ -3,15 +3,12 @@
 import { Check } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
+import { floorLabel } from "@/lib/floor-groups";
 import { storeyProgressText } from "@/lib/storey-floors";
 
 export type StoreyOption = { story: number; roomCount: number; areaM2: number };
 
-/** "Våning 1 (nedersta)" … by position, since the scan does not say what a floor is. */
-export function storeyLabel(index: number, count: number) {
-  const suffix = index === 0 ? " (nedersta)" : index === count - 1 ? " (översta)" : "";
-  return `Våning ${index + 1}${suffix}`;
-}
+export const storeyLabel = floorLabel;
 
 type StoreyPickerProps = {
   storeys: StoreyOption[];
