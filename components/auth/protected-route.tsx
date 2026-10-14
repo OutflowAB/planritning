@@ -37,6 +37,10 @@ function subscribeToAuthChanges(onStoreChange: () => void) {
   return () => window.removeEventListener("storage", handleStorage);
 }
 
+function subscribeNever() {
+  return () => {};
+}
+
 /**
  * Renders the page as soon as the browser has hydrated and the stored session says the user is
  * signed in, then confirms it with the server in the background.
@@ -51,6 +55,11 @@ function subscribeToAuthChanges(onStoreChange: () => void) {
  * identical on both sides without an effect round trip. A revoked session still redirects,
  * one beat later, and every route behind this guard is protected server side regardless of
  * what gets painted here.
+ *
+ * The server snapshot is only a stand-in for "not read yet". The first commit of a hard load
+ * still runs its effects with it, so the redirect below waits until the real value is in:
+ * otherwise a signed-in user is sent to /login (and straight back) on every reload, which
+ * unmounts the page, and the converter running in it, for no reason.
  */
 export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) {
   const router = useRouter();
@@ -60,10 +69,19 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
     () => isAuthenticated(),
     () => false,
   );
+  const isHydrated = useSyncExternalStore(
+    subscribeNever,
+    () => true,
+    () => false,
+  );
   const isAllowed = hasStoredSession && !isRevoked;
 
   useEffect(() => {
     let cancelled = false;
+
+    if (!isHydrated) {
+      return;
+    }
 
     if (!hasStoredSession) {
       router.replace("/login");
@@ -87,7 +105,7 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
     return () => {
       cancelled = true;
     };
-  }, [hasStoredSession, router]);
+  }, [hasStoredSession, isHydrated, router]);
 
   useEffect(() => {
     if (!isAllowed || !requiredRole) {
