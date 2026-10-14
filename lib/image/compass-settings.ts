@@ -16,13 +16,32 @@ export function normaliseRotation(degrees: number): number {
 }
 
 /**
- * The compass a plan starts with: a scan with a known direction shows it, anything else
- * (photos, scans without a heading) hides it and starts at north-up.
+ * The compass a plan starts with: always north-up. A scan shows it, anything else (photos,
+ * scans without a heading) starts hidden. The scan's own direction is no longer pre-selected.
  */
 export function defaultCompass(scanRotation: number | null): CompassSettings {
-  return scanRotation === null
-    ? { visible: false, rotation: 0 }
-    : { visible: true, rotation: normaliseRotation(scanRotation) };
+  return { visible: scanRotation !== null, rotation: 0 };
+}
+
+/**
+ * The eight directions the broker picks from. `rotation` is where NORTH points on the sheet,
+ * degrees clockwise from the top (so "O", east, turns the badge's N to the right).
+ */
+export const COMPASS_DIRECTIONS = [
+  { key: "N", name: "Norr", rotation: 0 },
+  { key: "NO", name: "Nordost", rotation: 45 },
+  { key: "O", name: "Ost", rotation: 90 },
+  { key: "SO", name: "Sydost", rotation: 135 },
+  { key: "S", name: "Syd", rotation: 180 },
+  { key: "SV", name: "Sydväst", rotation: 225 },
+  { key: "V", name: "Väst", rotation: 270 },
+  { key: "NV", name: "Nordväst", rotation: 315 },
+] as const;
+
+/** The direction closest to any angle (a stored plan may hold something between the eight). */
+export function nearestCompassDirection(degrees: number): (typeof COMPASS_DIRECTIONS)[number] {
+  const index = Math.round(normaliseRotation(degrees) / 45) % 8;
+  return COMPASS_DIRECTIONS[index];
 }
 
 /**
