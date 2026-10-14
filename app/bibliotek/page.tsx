@@ -16,10 +16,12 @@ import { TouchEvent, WheelEvent, useEffect, useLayoutEffect, useRef, useState } 
 
 import { getStoredRole } from "@/lib/auth";
 import {
+  exportFloorImagesToPdf,
   exportLibraryFloorplan,
   type LibraryExportFormat,
 } from "@/lib/floorplan/export-library";
 import { ThumbnailImage } from "@/components/ui/thumbnail-image";
+import { floorLabel, groupLibraryItems, parseFloorGroup, type LibraryEntry } from "@/lib/floor-groups";
 import { imageDisplayName, imageDownloadBaseName } from "@/lib/image-naming";
 import { apiFetch, apiJson, describeError } from "@/lib/api-client";
 import { imageUrl } from "@/lib/image-url";
@@ -39,6 +41,8 @@ const DOWNLOAD_FORMATS: Array<{ format: LibraryExportFormat; label: string }> = 
   { format: "jpg", label: "JPG" },
   { format: "jpeg", label: "JPEG" },
 ];
+
+type HouseEntry = Extract<LibraryEntry<GeneratedImageRow>, { kind: "group" }>;
 
 type GeneratedImageRow = {
   id: number;
@@ -98,9 +102,13 @@ export default function BibliotekPage() {
   const [isSendingToVerktyg, setIsSendingToVerktyg] = useState(false);
   // Which card triggered the edit, so only that button shows a spinner.
   const [editingImageId, setEditingImageId] = useState<number | null>(null);
+  // Houses (the floors of one scan) shown opened up, and the one being downloaded.
+  const [expandedRuns, setExpandedRuns] = useState<string[]>([]);
+  const [downloadingRun, setDownloadingRun] = useState<string | null>(null);
   const downloadMenuRef = useRef<HTMLDivElement | null>(null);
   const pinchStartDistanceRef = useRef<number | null>(null);
   const pinchStartZoomRef = useRef<number>(1);
+  const entries = groupLibraryItems(images);
   const selectedImageId = searchParams.get("imageId");
   const selectedImagePath = searchParams.get("imagePath");
   const previewImageId = searchParams.get("previewImageId");
@@ -353,6 +361,241 @@ export default function BibliotekPage() {
   }
 
 
+  function renderImageCard(image: GeneratedImageRow, imageIndex: number, floorText?: string) {
+    const isMarked = selectedImageIds.includes(image.id);
+
+    return (
+    <article
+      key={image.id}
+      id={`library-image-${image.id}`}
+      className={`overflow-hidden rounded-none border bg-white ${
+        selectedImage?.id === image.id || isMarked
+          ? "border-[#8b7355] shadow-[0_0_0_2px_rgba(139,115,85,0.2)]"
+          : "border-[#d8d2c8]"
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+        <p className="text-xs font-medium text-[#7b746a]">
+          {new Date(image.created_at).toLocaleString("sv-SE")}
+        </p>
+        <div className="ml-auto flex items-center gap-2">
+          <p className="text-xs font-semibold text-[#6a6258]">
+              {floorText ? `${floorText} · ` : ""}Bild {image.id}
+            </p>
+          {canDelete ? (
+            <label className="inline-flex items-center">
+              <input
+                type="checkbox"
+                checked={isMarked}
+                onChange={() => toggleImageSelection(image.id)}
+                disabled={isDeletingSelected}
+                className="h-5 w-5 rounded border-[#b7aea1] text-[#8b7355] focus:ring-[#8b7355]"
+              />
+            </label>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="bg-[#f0ece6] p-4">
+        <button
+          type="button"
+          onClick={() => openImagePreview(image.id)}
+          disabled={!image.preview_url}
+          className="block w-full cursor-zoom-in disabled:cursor-default"
+        >
+          <ThumbnailImage
+            src={image.preview_url}
+            alt={imageDisplayName(image.id)}
+            onPrefetch={() => prefetchImage(image.full_url)}
+            heightClassName="h-[220px]"
+            sizes={"(max-width: 768px) 90vw, (max-width: 1280px) 45vw, 30vw"}
+            priority={imageIndex < 3}
+          />
+        </button>
+      </div>
+
+      <div className="flex items-center border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+        <button
+          type="button"
+          onClick={() => void sendBackToVerktyg(image)}
+          disabled={isSendingToVerktyg}
+          className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-3 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {editingImageId === image.id ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              Öppnar...
+            </>
+          ) : (
+            <>
+              <Pencil size={13} aria-hidden="true" />
+              Redigera
+            </>
+          )}
+        </button>
+      </div>
+    </article>
+    );
+  }
+
+  function toggleHouse(run: string) {
+    setExpandedRuns((previous) =>
+      previous.includes(run) ? previous.filter((entry) => entry !== run) : [...previous, run],
+    );
+  }
+
+  function toggleHouseSelection(ids: number[]) {
+    setSelectedImageIds((previous) =>
+      ids.every((id) => previous.includes(id))
+        ? previous.filter((id) => !ids.includes(id))
+        : [...new Set([...previous, ...ids])],
+    );
+  }
+
+  async function downloadHouse(entry: HouseEntry) {
+    if (downloadingRun) {
+      return;
+    }
+    const urls = entry.floors.flatMap((floor) => (floor.item.full_url ? [floor.item.full_url] : []));
+    setDownloadingRun(entry.run);
+    setActionError("");
+    try {
+      await exportFloorImagesToPdf(urls, `planritning-${entry.run}`);
+    } catch {
+      setActionError("Kunde inte ladda ner våningarna just nu.");
+    } finally {
+      setDownloadingRun(null);
+    }
+  }
+
+  function renderHouse(entry: HouseEntry) {
+    const expanded = expandedRuns.includes(entry.run);
+    const ids = entry.floors.map((floor) => floor.item.id);
+    const allMarked = ids.every((id) => selectedImageIds.includes(id));
+    const cover = entry.floors[0].item;
+    const title = `Polycam-skanning · ${entry.floors.length} våningar`;
+    const downloadButton = (
+      <button
+        type="button"
+        onClick={() => void downloadHouse(entry)}
+        disabled={downloadingRun !== null}
+        className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-3 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {downloadingRun === entry.run ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+        ) : (
+          <Download size={13} aria-hidden="true" />
+        )}
+        Ladda ner alla (PDF)
+      </button>
+    );
+    const selectBox = canDelete ? (
+      <label className="inline-flex items-center" title="Markera alla våningar">
+        <input
+          type="checkbox"
+          checked={allMarked}
+          onChange={() => toggleHouseSelection(ids)}
+          disabled={isDeletingSelected}
+          aria-label={`Markera ${title}`}
+          className="h-5 w-5 rounded border-[#b7aea1] text-[#8b7355] focus:ring-[#8b7355]"
+        />
+      </label>
+    ) : null;
+
+    if (expanded) {
+      return (
+        <section
+          key={entry.run}
+          data-testid="house-group"
+          aria-label={title}
+          className="col-span-full border border-[#8b7355] bg-[#faf8f4]"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold text-[#4d463f]">{title}</p>
+              <p className="text-xs text-[#7b746a]">
+                {new Date(cover.created_at).toLocaleString("sv-SE")}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {downloadButton}
+              <button
+                type="button"
+                onClick={() => toggleHouse(entry.run)}
+                aria-expanded="true"
+                className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-3 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
+              >
+                <ChevronDown size={13} className="rotate-180" aria-hidden="true" />
+                Dölj våningar
+              </button>
+              {selectBox}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3">
+            {entry.floors.map((floor) =>
+              renderImageCard(
+                floor.item,
+                images.indexOf(floor.item),
+                floorLabel(floor.position, floor.total),
+              ),
+            )}
+          </div>
+        </section>
+      );
+    }
+
+    return (
+      <div key={entry.run} data-testid="house-group" className="relative pb-3 pr-3">
+        <div aria-hidden="true" className="absolute inset-0 translate-x-3 translate-y-3 border border-[#d8d2c8] bg-[#f0ece6]" />
+        <div aria-hidden="true" className="absolute inset-0 translate-x-1.5 translate-y-1.5 border border-[#d8d2c8] bg-[#f7f4ef]" />
+        <article
+          aria-label={title}
+          className={`relative overflow-hidden rounded-none border bg-white ${
+            allMarked ? "border-[#8b7355] shadow-[0_0_0_2px_rgba(139,115,85,0.2)]" : "border-[#d8d2c8]"
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+            <p className="text-xs font-medium text-[#7b746a]">
+              {new Date(cover.created_at).toLocaleString("sv-SE")}
+            </p>
+            <div className="ml-auto flex items-center gap-2">
+              <p className="text-xs font-semibold text-[#6a6258]">{title}</p>
+              {selectBox}
+            </div>
+          </div>
+          <div className="bg-[#f0ece6] p-4">
+            <button
+              type="button"
+              onClick={() => toggleHouse(entry.run)}
+              aria-expanded="false"
+              aria-label={`Visa våningarna i ${title}`}
+              className="block w-full cursor-pointer"
+            >
+              <ThumbnailImage
+                src={cover.preview_url}
+                alt={title}
+                heightClassName="h-[220px]"
+                sizes={"(max-width: 768px) 90vw, (max-width: 1280px) 45vw, 30vw"}
+              />
+            </button>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+            <button
+              type="button"
+              onClick={() => toggleHouse(entry.run)}
+              aria-expanded="false"
+              className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-3 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
+            >
+              <ChevronDown size={13} aria-hidden="true" />
+              Visa våningar
+            </button>
+            {downloadButton}
+          </div>
+        </article>
+      </div>
+    );
+  }
+
   useEffect(() => subscribeToAppEvent(LIBRARY_UPDATED_EVENT, reloadLibrary), [reloadLibrary]);
 
   // A selection cannot outlive the rows it points at.
@@ -361,6 +604,18 @@ export default function BibliotekPage() {
       setSelectedImageIds((previous) => previous.filter((id) => images.some((row) => row.id === id)));
     });
   }, [images]);
+  // A floor that is being pointed at (a redirect after approving, a preview link) needs its
+  // house opened, or there is no card to scroll to.
+  const focusedRun = parseFloorGroup((selectedImage ?? previewImage)?.file_path)?.run;
+  useEffect(() => {
+    if (!focusedRun) {
+      return;
+    }
+    queueMicrotask(() => {
+      setExpandedRuns((previous) => (previous.includes(focusedRun) ? previous : [...previous, focusedRun]));
+    });
+  }, [focusedRun]);
+
   useEffect(() => {
     if (!selectedImage || images.length === 0) {
       return;
@@ -489,79 +744,11 @@ export default function BibliotekPage() {
 
         {!isLoading && !loadError && images.length > 0 ? (
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {images.map((image, imageIndex) => {
-              const isMarked = selectedImageIds.includes(image.id);
-
-              return (
-              <article
-                key={image.id}
-                id={`library-image-${image.id}`}
-                className={`overflow-hidden rounded-none border bg-white ${
-                  selectedImage?.id === image.id || isMarked
-                    ? "border-[#8b7355] shadow-[0_0_0_2px_rgba(139,115,85,0.2)]"
-                    : "border-[#d8d2c8]"
-                }`}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
-                  <p className="text-xs font-medium text-[#7b746a]">
-                    {new Date(image.created_at).toLocaleString("sv-SE")}
-                  </p>
-                  <div className="ml-auto flex items-center gap-2">
-                    <p className="text-xs font-semibold text-[#6a6258]">Bild {image.id}</p>
-                    {canDelete ? (
-                      <label className="inline-flex items-center">
-                        <input
-                          type="checkbox"
-                          checked={isMarked}
-                          onChange={() => toggleImageSelection(image.id)}
-                          disabled={isDeletingSelected}
-                          className="h-5 w-5 rounded border-[#b7aea1] text-[#8b7355] focus:ring-[#8b7355]"
-                        />
-                      </label>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="bg-[#f0ece6] p-4">
-                  <button
-                    type="button"
-                    onClick={() => openImagePreview(image.id)}
-                    disabled={!image.preview_url}
-                    className="block w-full cursor-zoom-in disabled:cursor-default"
-                  >
-                    <ThumbnailImage
-                      src={image.preview_url}
-                      alt={imageDisplayName(image.id)}
-                      onPrefetch={() => prefetchImage(image.full_url)}
-                      heightClassName="h-[220px]"
-                      sizes={"(max-width: 768px) 90vw, (max-width: 1280px) 45vw, 30vw"}
-                      priority={imageIndex < 3}
-                    />
-                  </button>
-                </div>
-
-                <div className="flex items-center border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
-                  <button
-                    type="button"
-                    onClick={() => void sendBackToVerktyg(image)}
-                    disabled={isSendingToVerktyg}
-                    className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-3 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {editingImageId === image.id ? (
-                      <>
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                        Öppnar...
-                      </>
-                    ) : (
-                      <>
-                        <Pencil size={13} aria-hidden="true" />
-                        Redigera
-                      </>
-                    )}
-                  </button>
-                </div>
-              </article>
-              );
+            {entries.map((entry) => {
+              if (entry.kind === "single") {
+                return renderImageCard(entry.item, images.indexOf(entry.item));
+              }
+              return renderHouse(entry);
             })}
           </div>
         ) : null}
