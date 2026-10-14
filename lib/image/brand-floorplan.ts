@@ -32,14 +32,14 @@ const SHEET = {
   headingCenterY: 0.095,
   headingSize: 0.031,
   headingLetterSpacingEm: 0.05,
-  compassCenterX: 0.924,
-  compassCenterY: 0.076,
-  compassRadius: 0.05,
+  compassCenterX: 0.872,
+  compassCenterY: 0.128,
+  compassRadius: 0.077,
   logoWidth: 0.24,
   /** Logo centre, as a fraction of the sheet height. */
   logoCenterY: 0.932,
   /** The drawing may use this part of the sheet: between the heading and the logo. */
-  areaTop: 0.13,
+  areaTop: 0.15,
   areaBottom: 0.88,
   areaWidth: 0.84,
 } as const;

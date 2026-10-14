@@ -16,7 +16,7 @@ export function compassSvg(
 ): string {
   const stroke = Math.max(1, radius * 0.03);
   // The rings sit inside `radius`, leaving the outer band to the letters.
-  const ringR = radius * 0.72;
+  const ringR = radius * 0.6;
   const rotate = `rotate(${rotationDegrees} ${centerX} ${centerY})`;
 
   // 16 ticks between the two rings; the four cardinal ones reach the outer ring.
@@ -27,20 +27,20 @@ export function compassSvg(
   }).join("");
 
   // Kite needle: the northern half is solid black, the southern half an outline.
-  const tip = radius * 0.7;
-  const side = radius * 0.2;
+  const tip = radius * 0.58;
+  const side = radius * 0.17;
   const needle = `
     <polygon points="${centerX},${centerY - tip} ${centerX + side},${centerY} ${centerX},${centerY + radius * 0.12} ${centerX - side},${centerY}" fill="#000000" />
     <polygon points="${centerX},${centerY + tip} ${centerX + side},${centerY} ${centerX},${centerY - radius * 0.12} ${centerX - side},${centerY}" fill="none" />`;
 
-  const letterRadius = radius * 0.93;
+  const letterRadius = radius * 0.9;
   const letters = (["N", "E", "S", "W"] as const)
     .map((letter, index) => {
       const angle = ((rotationDegrees + index * 90) * Math.PI) / 180;
       return sheetTextSvg(letter, {
         centerX: centerX + Math.sin(angle) * letterRadius,
         centerY: centerY - Math.cos(angle) * letterRadius,
-        size: radius * 0.4,
+        size: radius * 0.32,
       });
     })
     .join("");
