@@ -5,6 +5,8 @@ import {
   markFloor,
   nextPendingFloor,
   replaceFloor,
+  savedImageVersion,
+  updateFloorImage,
   storeyProgressText,
   type StoreyFloor,
 } from "@/lib/storey-floors";
@@ -41,5 +43,23 @@ describe("floor review state", () => {
     const list = replaceFloor(floors(), 1, conversion(9));
     expect(list[1]).toMatchObject({ status: "redone", conversion: { savedImageId: 9 } });
     expect(nextPendingFloor(list, 0)).toBe(1);
+  });
+});
+
+describe("re-composed floors", () => {
+  it("reads the version out of a saved image URL", () => {
+    expect(savedImageVersion("/api/image?id=3&variant=full&v=abc123")).toBe("abc123");
+    expect(savedImageVersion("/api/image?id=3&variant=full")).toBeNull();
+    expect(savedImageVersion(null)).toBeNull();
+  });
+
+  it("gives only the matching floor its new picture", () => {
+    const updated = updateFloorImage(floors(), 2, "/api/image?id=2&variant=full&v=9");
+    expect(updated.map((floor) => floor.conversion.savedImageUrl)).toEqual([
+      undefined,
+      "/api/image?id=2&variant=full&v=9",
+      undefined,
+    ]);
+    expect(updated[1].status).toBe("pending");
   });
 });

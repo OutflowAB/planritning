@@ -78,7 +78,7 @@ function CompassPreview({
         dragging.current = false;
       }}
     >
-      <g transform={`rotate(${rotation})`} fill="none" stroke="#000" strokeWidth={layout.stroke * 1.6}>
+      <g transform={`rotate(${rotation})`} fill="none" stroke="#000" strokeWidth={0.03}>
         <circle r={1} />
         <circle r={layout.innerRadius} />
         {[45, 135, 225, 315].map((angle) => (
