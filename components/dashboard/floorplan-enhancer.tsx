@@ -57,7 +57,9 @@ import {
   setPendingSourceSelection,
 } from "@/lib/startsida-source-session";
 import { ApiError, apiFetch, apiJson } from "@/lib/api-client";
+import { StoreyGallery } from "@/components/dashboard/storey-gallery";
 import { StoreyPicker, StoreyProgress, storeyLabel, type StoreyOption } from "@/components/dashboard/storey-picker";
+import { markFloor, nextPendingFloor, replaceFloor, type StoreyFloor } from "@/lib/storey-floors";
 import { dispatchGenerationUpdated } from "@/lib/app-events";
 import { imageUrl } from "@/lib/image-url";
 import type { ImageListItem } from "@/app/api/images/route";
@@ -566,12 +568,13 @@ export function FloorplanEnhancer() {
   // which reuses the stored plan and tells the model what it is looking at.
   const [isScanSource, setIsScanSource] = useState(() => cachedReviewPreview.isScanSource);
   const [polycamLink, setPolycamLink] = useState("");
-  // Multi-storey scans: the floors to choose from, the run in progress, and finished plans
-  // still waiting for their turn in the review (they are reviewed one after another).
+  // Multi-storey scans: the floors to choose from, the run in progress, and every drawn floor
+  // with its review status. Any of them can be put in the review card, in any order.
   const [isInspecting, setIsInspecting] = useState(false);
   const [storeyChoice, setStoreyChoice] = useState<{ url: string; storeys: StoreyOption[] } | null>(null);
   const [multiRun, setMultiRun] = useState<{ labels: string[]; done: number } | null>(null);
-  const [queuedResults, setQueuedResults] = useState<ConvertDoneEvent[]>([]);
+  const [floors, setFloors] = useState<StoreyFloor[]>([]);
+  const [activeFloor, setActiveFloor] = useState<number | null>(null);
   const [previewImageType, setPreviewImageType] = useState<"source" | "result" | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [isCompareSliderReady, setIsCompareSliderReady] = useState(() =>
@@ -679,6 +682,8 @@ export function FloorplanEnhancer() {
     setIsSubmitting(false);
     setSourceFile(null);
     setSourceImageId(null);
+    setFloors([]);
+    setActiveFloor(null);
     setIsDragActive(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -849,6 +854,8 @@ export function FloorplanEnhancer() {
   const isRestoringPendingSource = hasPendingSourceSelection() && !hasRestoredPendingSource;
   const showGenerationReview =
     Boolean(resultPreviewUrl && sourcePreviewUrl) || isRestoringPendingReview;
+  const activeFloorApproved =
+    activeFloor !== null && floors.length > 1 && floors[activeFloor]?.status === "approved";
   const isComparePreviewLoading =
     showGenerationReview && (!resultPreviewUrl || !sourcePreviewUrl || !alignedSourcePreviewUrl);
   const isCompareReviewReady = Boolean(
@@ -1129,21 +1136,90 @@ export function FloorplanEnhancer() {
     applyConversionResult(conversion, scanPreviewUrl, "scan");
   }
 
-  /** Moves on to the next finished storey, if any. Returns whether there was one. */
-  function showNextQueuedResult() {
-    const [next, ...rest] = queuedResults;
-    if (!next) {
+  /** Puts one of the drawn floors in the review card. */
+  function selectFloor(index: number, list: StoreyFloor[] = floors) {
+    const floor = list[index];
+    if (!floor) {
+      return;
+    }
+    setActiveFloor(index);
+    setShowRejectForm(false);
+    setRejectComment("");
+    setErrorMessage("");
+    setPreviewZoom(1);
+    if (index !== activeFloor) {
+      setIsCompareSliderReady(false);
+      showScanResult(floor.conversion);
+    }
+  }
+
+  function enlargeFloor(index: number) {
+    selectFloor(index);
+    setPreviewImageType("result");
+  }
+
+  /** Marks the shown floor approved and moves on to one that is still open. Returns whether there was one. */
+  function finishActiveFloor() {
+    if (activeFloor === null || floors.length < 2) {
       return false;
     }
-    setQueuedResults(rest);
-    clearGenerationResult();
-    showScanResult(next);
+    const updated = markFloor(floors, activeFloor, "approved");
+    setFloors(updated);
+    const next = nextPendingFloor(updated, activeFloor);
+    if (next < 0) {
+      return false;
+    }
+    selectFloor(next, updated);
     return true;
+  }
+
+  /** Approves and saves every floor still open to Planritningar in one go. */
+  async function approveAllFloors() {
+    const open = floors.filter((floor) => floor.status !== "approved");
+    if (isReviewSubmitting || open.length === 0) {
+      return;
+    }
+
+    setErrorMessage("");
+    setIsReviewSubmitting(true);
+    try {
+      for (const { conversion } of open) {
+        const body = { imageId: conversion.savedImageId, filePath: conversion.savedImagePath };
+        await apiFetch("/api/review-generation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "approve", ...body }),
+        });
+        await apiFetch("/api/save-generation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        setFloors((previous) =>
+          previous.map((floor) =>
+            floor.conversion.savedImageId === conversion.savedImageId
+              ? { ...floor, status: "approved" }
+              : floor,
+          ),
+        );
+      }
+      clearPendingVerktygSave();
+      clearPendingGenerationReview();
+      dispatchGenerationUpdated();
+      const last = open[open.length - 1].conversion;
+      router.push(
+        buildPlanritningarHref(pathname, { imageId: last.savedImageId, imagePath: last.savedImagePath }),
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
+    } finally {
+      setIsReviewSubmitting(false);
+    }
   }
 
   /**
    * Draws the chosen storeys one at a time, each as its own conversion (and its own
-   * generation). The first finished plan is shown at once; the rest wait their turn.
+   * generation). Every finished plan lands in the floor gallery; the first one is shown.
    */
   async function processPolycamStoreys(url: string, stories: number[], storeys: StoreyOption[]) {
     if (isSubmitting) {
@@ -1163,6 +1239,8 @@ export function FloorplanEnhancer() {
     setIsSubmitting(true);
     setProcessingStatusMessage(null);
     setMultiRun({ labels, done: 0 });
+    setFloors([]);
+    setActiveFloor(null);
 
     try {
       for (const [index, story] of stories.entries()) {
@@ -1192,9 +1270,16 @@ export function FloorplanEnhancer() {
       setMultiRun(null);
     }
 
-    const [first, ...rest] = results;
+    const [first] = results;
     if (first) {
-      setQueuedResults(rest);
+      setFloors(
+        results.map((conversion, index) => ({
+          label: labels[index],
+          conversion,
+          status: "pending" as const,
+        })),
+      );
+      setActiveFloor(0);
       showScanResult(first);
     }
   }
@@ -1233,6 +1318,13 @@ export function FloorplanEnhancer() {
       return;
     }
 
+    // A redraw of one floor of a multi-storey run keeps its place in the gallery.
+    const redoIndex = "sourceImageId" in target ? activeFloor : null;
+    if (redoIndex === null) {
+      setFloors([]);
+      setActiveFloor(null);
+    }
+
     setErrorMessage("");
     setIsSubmitting(true);
     setProcessingStatusMessage(null);
@@ -1248,6 +1340,9 @@ export function FloorplanEnhancer() {
         onStatus: (event) => setProcessingStatusMessage(event.message),
       });
 
+      if (redoIndex !== null) {
+        setFloors((previous) => replaceFloor(previous, redoIndex, conversion));
+      }
       showScanResult(conversion);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
@@ -1337,8 +1432,8 @@ export function FloorplanEnhancer() {
           setSectionOverlayTarget(null);
           setRejectComment("");
           dispatchGenerationUpdated();
-          // More storeys are waiting: stay here and review the next one instead of leaving.
-          if (showNextQueuedResult()) {
+          // More floors are waiting: stay here and review the next one instead of leaving.
+          if (finishActiveFloor()) {
             showToast("Våningen är sparad. Nästa våning väntar på granskning.");
             return;
           }
@@ -1356,8 +1451,8 @@ export function FloorplanEnhancer() {
         setShowApproveDestinationModal(false);
         setSectionOverlayTarget(null);
         setRejectComment("");
-        // The editor takes this one; the next storey is ready for when the user comes back.
-        showNextQueuedResult();
+        // The editor takes this one; the next floor is ready for when the user comes back.
+        finishActiveFloor();
         router.push(
           buildVerktygHref(pathname, {
             imageId: resultImageId,
@@ -1745,6 +1840,17 @@ export function FloorplanEnhancer() {
             </figure>
           ) : null}
 
+          {showGenerationReview && floors.length > 1 ? (
+            <StoreyGallery
+              floors={floors}
+              activeIndex={activeFloor}
+              disabled={isReviewSubmitting}
+              onSelect={selectFloor}
+              onEnlarge={enlargeFloor}
+              onApproveAll={() => void approveAllFloors()}
+            />
+          ) : null}
+
           {showGenerationReview ? (
             <figure
               className={`mx-auto overflow-hidden rounded-none border border-[#d8d2c8] bg-white leading-none ${
@@ -1756,7 +1862,10 @@ export function FloorplanEnhancer() {
                   Före / Efter
                 </span>
                 {resultImageId ? (
-                  <span className="text-xs font-semibold text-[#6a6258]">{imageDisplayName(resultImageId)}</span>
+                  <span className="text-xs font-semibold text-[#6a6258]">
+                    {activeFloor !== null && floors.length > 1 ? `${floors[activeFloor]?.label} · ` : ""}
+                    {imageDisplayName(resultImageId)}
+                  </span>
                 ) : null}
               </figcaption>
               {isComparePreviewLoading ? (
@@ -1805,6 +1914,10 @@ export function FloorplanEnhancer() {
                     </button>
                   </div>
                 </div>
+              ) : activeFloorApproved ? (
+                <p className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4 text-center text-sm font-medium text-[#3f6b3f]">
+                  {floors[activeFloor ?? 0]?.label} är godkänd och sparad.
+                </p>
               ) : isCompareReviewReady && alignedSourcePreviewUrl ? (
                 <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4">
                   <p className="mb-3 text-center text-sm font-medium text-[#5c544a]">

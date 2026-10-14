@@ -3,6 +3,8 @@
 import { Check } from "lucide-react";
 import { useState } from "react";
 
+import { storeyProgressText } from "@/lib/storey-floors";
+
 export type StoreyOption = { story: number; roomCount: number; areaM2: number };
 
 /** "Våning 1 (nedersta)" … by position, since the scan does not say what a floor is. */
@@ -119,9 +121,7 @@ export function StoreyProgress({ labels, done }: StoreyProgressProps) {
         })}
       </ol>
       <p className="text-center text-sm font-medium text-[#5c544a]">
-        {done >= labels.length
-          ? "Alla våningar klara"
-          : `Våning ${done} av ${labels.length} klar`}
+        {storeyProgressText(done, labels.length)}
       </p>
     </div>
   );
