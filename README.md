@@ -49,6 +49,28 @@ Appen kor pa [http://localhost:3000](http://localhost:3000).
 logotyp och ram via `sharp`. Bilderna i `assets/style-references/` skickas med som
 stilreferenser - se `assets/style-references/README.md`.
 
+### Planritningsbladet (A4 stående)
+
+Resultatet är ett A4-blad i stående format (1:√2) med ram, rubriken `PLANLÖSNING`, logotyp
+och - bara för Polycam-skanningar där riktningen är känd - en kompassros uppe till höger.
+Allt utom själva ritningen ritas av kod i `lib/image/brand-floorplan.ts`, aldrig av AI:n.
+
+**Typsnitt.** Kundens sajt använder det licensierade typsnittet Neutra, som vi inte får
+leverera med koden. Rubriken och kompassbokstäverna använder i stället Questrial (SIL OFL,
+`assets/fonts/Questrial-Regular.ttf`, licens i `assets/fonts/Questrial-OFL.txt`). Texten
+omvandlas till SVG-konturer (`lib/image/sheet-font.ts`), så ingen systemfont behövs på servern.
+
+Byta till Neutra när licensen finns:
+
+1. Lägg Neutra-filen (`.ttf` eller `.otf`) i `assets/fonts/`. Checka inte in den om
+   licensen förbjuder det - lägg den då på servern vid deploy.
+2. Ändra `SHEET_FONT_FILE` i `lib/image/sheet-font.ts` till filnamnet.
+3. Har filen ett riktigt fetstilsnitt: sätt `SHEET_FONT_EMBOLDEN_EM` till `0`.
+   (Questrial finns bara i normalvikt, så fetstilen görs där med en kontur runt tecknen.)
+
+`next.config.ts` bundlar hela `assets/fonts/` för sidorna som komponerar blad, så ingen mer
+ändring behövs. Å, Ä och Ö måste finnas i den nya filen.
+
 Miljovariabler:
 
 | Variabel | Standard | Beskrivning |
