@@ -43,6 +43,11 @@ function preloadImage(src: string) {
   });
 }
 
+/** Resolves once the image is loaded and remembered, so a slider given it shows no loading state. */
+export function preloadCompareImageSrc(src: string) {
+  return preloadImage(src);
+}
+
 export function warmCompareImageSrc(src: string) {
   void preloadImage(src).catch(() => undefined);
 }

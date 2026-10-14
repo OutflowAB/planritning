@@ -3,7 +3,7 @@
 import { Check, Maximize2, RotateCcw } from "lucide-react";
 
 import { imageUrl } from "@/lib/image-url";
-import type { StoreyFloor } from "@/lib/storey-floors";
+import { savedImageVersion, type StoreyFloor } from "@/lib/storey-floors";
 
 type StoreyGalleryProps = {
   floors: StoreyFloor[];
@@ -64,7 +64,7 @@ export function StoreyGallery({
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={imageUrl(floor.conversion.savedImageId, "thumb")}
+                  src={imageUrl(floor.conversion.savedImageId, "thumb", savedImageVersion(floor.conversion.savedImageUrl))}
                   alt={floor.label}
                   className="aspect-[1/1.414] w-full bg-[#f2ede5] object-contain"
                 />
