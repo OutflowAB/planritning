@@ -95,6 +95,8 @@ export type ConversionSource = {
   mimeType: string;
   /** An upload that already holds this source, so a redraw does not store it twice. */
   sourceImageId: number | null;
+  /** Where a source that was not uploaded as a file came from, e.g. a Polycam link. */
+  sourceUrl?: string;
 };
 
 /**
@@ -187,6 +189,23 @@ export async function resolveSourceUploadId(
       sourceUploadId: null,
       sourceUploadError: "Kunde inte spara metadata för originalbilden.",
     };
+  }
+
+  if (source.sourceUrl) {
+    // A separate, best-effort write: the column arrives with a migration that may not have
+    // run yet, and a missing link is not worth failing a finished conversion over.
+    const { error: sourceUrlError } = await supabase
+      .from(UPLOADS_TABLE)
+      .update({ source_url: source.sourceUrl })
+      .eq("id", insertedSource.id);
+
+    if (sourceUrlError) {
+      console.warn(
+        `Source link not saved; has database/2026-10-14-uploaded-images-source-url.sql been run? ${JSON.stringify(
+          { id: insertedSource.id, reason: sourceUrlError.message },
+        )}`,
+      );
+    }
   }
 
   return {

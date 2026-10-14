@@ -10,7 +10,7 @@ import {
 import { fetchRoomplan, PolycamError } from "@/lib/polycam/fetch-roomplan";
 import { parseRoomplan } from "@/lib/polycam/parse-roomplan";
 import { renderPlan } from "@/lib/polycam/render-plan";
-import { parsePolycamCaptureId } from "@/lib/polycam/url";
+import { parsePolycamCaptureId, polycamCaptureUrl } from "@/lib/polycam/url";
 import { requireRole } from "@/lib/server-auth";
 import {
   BUCKET_NAME,
@@ -147,7 +147,13 @@ export async function POST(request: Request) {
         );
 
         inputBuffer = plan.png;
-        source = { fileName: `polycam-${id}.png`, mimeType: "image/png", sourceImageId: null };
+        source = {
+          fileName: `polycam-${id}.png`,
+          mimeType: "image/png",
+          sourceImageId: null,
+          // Rebuilt from the id, never the pasted text.
+          sourceUrl: polycamCaptureUrl(id),
+        };
       } catch (error) {
         if (error instanceof PolycamError) {
           throw new ConvertFailure(error.message);

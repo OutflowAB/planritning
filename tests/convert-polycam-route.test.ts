@@ -179,6 +179,25 @@ describe("POST /api/convert-polycam", () => {
     expect(logged.some((line) => line.includes("Polycam plan rendered"))).toBe(true);
   });
 
+  it("records the canonical capture link on the source, never the pasted text", async () => {
+    const { done } = await collect(
+      await POST(jsonRequest({ url: `https://poly.cam/explore/capture/${ID}/Sep-21-0850-AM?utm=x` })),
+    );
+    expect(fake.table.get(done.sourceImageId)?.source_url).toBe(`https://poly.cam/capture/${ID}`);
+    expect(fake.table.get(done.savedImageId)).not.toHaveProperty("source_url");
+  });
+
+  it("still converts when the source_url migration has not run", async () => {
+    fake = createFakeSupabase({ missingColumns: ["source_url"] });
+    mocks.supabase = fake.client;
+
+    const { done } = await collect(await POST(jsonRequest({ url: `https://poly.cam/capture/${ID}` })));
+
+    expect(done.savedImageId).toBeGreaterThan(0);
+    expect(fake.table.get(done.sourceImageId)).not.toHaveProperty("source_url");
+    expect(logged.some((line) => line.includes("2026-10-14-uploaded-images-source-url.sql"))).toBe(true);
+  });
+
   it("emits a done event shaped exactly like the photo route's", async () => {
     const { done: scanDone } = await collect(await POST(jsonRequest({ url: `https://poly.cam/capture/${ID}` })));
 
