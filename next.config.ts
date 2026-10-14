@@ -4,6 +4,7 @@ const nextConfig: NextConfig = {
   // The style references live outside public/, so tracing has to be told to bundle them.
   outputFileTracingIncludes: {
     "/api/convert": ["./assets/style-references/**/*"],
+    "/api/convert-polycam": ["./assets/style-references/**/*"],
   },
 };
 
