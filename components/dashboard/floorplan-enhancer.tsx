@@ -535,7 +535,7 @@ type SheetCompassState = {
   reason?: string;
 };
 
-const COMPASS_DEBOUNCE_MS = 450;
+const COMPASS_DEBOUNCE_MS = 150;
 
 function sheetCompassFromConversion(compass: ConvertCompass): SheetCompassState {
   const settings = { visible: compass.visible, rotation: compass.rotation };
@@ -1910,7 +1910,6 @@ export function FloorplanEnhancer() {
               compass={
                 <CompassControl
                   value={plannedCompass}
-                  defaultValue={defaultCompass(plannedScanRotation)}
                   onChange={setPlannedCompass}
                 />
               }
@@ -2001,7 +2000,6 @@ export function FloorplanEnhancer() {
               <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-3 pt-3 leading-normal">
                 <CompassControl
                   value={plannedCompass}
-                  defaultValue={defaultCompass(isScanSource ? plannedScanRotation : null)}
                   onChange={setPlannedCompass}
                   disabled={isSubmitting}
                 />
@@ -2075,7 +2073,6 @@ export function FloorplanEnhancer() {
                 <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-3 py-3 leading-normal">
                   <CompassControl
                     value={sheetCompass[resultImageId].settings}
-                    defaultValue={defaultCompass(sheetCompass[resultImageId].scanRotation)}
                     onChange={changeSheetCompass}
                     disabled={isReviewSubmitting}
                     unavailableReason={

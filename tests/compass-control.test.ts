@@ -6,9 +6,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 import { parseFloorGroup } from "@/lib/floor-groups";
 import { readConvertStream } from "@/lib/floorplan/convert-stream";
+import { compassNeedlePoints } from "@/lib/image/compass-geometry";
+import { compassSvg } from "@/lib/image/sheet-compass";
 import {
+  COMPASS_DIRECTIONS,
   compassRotationToDraw,
   defaultCompass,
+  nearestCompassDirection,
   normaliseRotation,
   parseCompassFormFields,
   parseCompassSettings,
@@ -131,19 +135,66 @@ describe("compass settings parsing", () => {
     expect(parseCompassFormFields(null, null)).toBeNull();
   });
 
-  it("starts scans shown and photos hidden, and draws nothing when hidden", () => {
-    expect(defaultCompass(120)).toEqual({ visible: true, rotation: 120 });
+  it("starts scans shown and photos hidden, always north-up, and draws nothing when hidden", () => {
+    expect(defaultCompass(120)).toEqual({ visible: true, rotation: 0 });
     expect(defaultCompass(null)).toEqual({ visible: false, rotation: 0 });
     expect(compassRotationToDraw({ visible: false, rotation: 40 })).toBeNull();
     expect(compassRotationToDraw({ visible: true, rotation: 40 })).toBe(40);
   });
 });
 
+describe("eight-direction compass picker", () => {
+  it("maps each direction to where north points, clockwise from the top", () => {
+    expect(COMPASS_DIRECTIONS.map((d) => [d.key, d.rotation])).toEqual([
+      ["N", 0],
+      ["NO", 45],
+      ["O", 90],
+      ["SO", 135],
+      ["S", 180],
+      ["SV", 225],
+      ["V", 270],
+      ["NV", 315],
+    ]);
+  });
+
+  it("choosing O draws the badge's north to the right (and N straight up)", () => {
+    const tip = compassNeedlePoints(1).north; // the badge's north, drawn straight up
+    // SVG rotate(a) is clockwise on screen: (x, y) -> (x cos a - y sin a, x sin a + y cos a), y down.
+    const turned = (degrees: number) => {
+      const a = (degrees * Math.PI) / 180;
+      return { x: tip.x * Math.cos(a) - tip.y * Math.sin(a), y: tip.x * Math.sin(a) + tip.y * Math.cos(a) };
+    };
+    const rotationOf = (key: string) => COMPASS_DIRECTIONS.find((d) => d.key === key)!.rotation;
+    const north = turned(rotationOf("N"));
+    expect(north.x).toBeCloseTo(0);
+    expect(north.y).toBeLessThan(0); // up
+    const east = turned(rotationOf("O"));
+    expect(east.x).toBeGreaterThan(0.5); // right
+    expect(east.y).toBeCloseTo(0);
+    const northEast = turned(rotationOf("NO"));
+    expect(northEast.x).toBeGreaterThan(0);
+    expect(northEast.y).toBeLessThan(0); // up-right
+    expect(turned(rotationOf("V")).x).toBeLessThan(-0.5); // left
+
+    // The sheet applies exactly that rotation to the whole badge, and moves the N letter with it.
+    const svg = compassSvg(100, 100, 50, rotationOf("O"));
+    expect(svg).toContain('transform="rotate(90 100 100)"');
+  });
+
+  it("snaps an old, in-between angle to the nearest direction", () => {
+    expect(nearestCompassDirection(299.1).key).toBe("NV");
+    expect(nearestCompassDirection(280).key).toBe("V");
+    expect(nearestCompassDirection(340).key).toBe("N");
+    expect(nearestCompassDirection(359.9).key).toBe("N");
+    expect(nearestCompassDirection(22.4).key).toBe("N");
+    expect(nearestCompassDirection(22.6).key).toBe("NO");
+  });
+});
+
 describe("compass choice on the convert routes", () => {
-  it("defaults a scan to its own direction and keeps the raw drawing for later", async () => {
+  it("defaults a scan to north-up, shown, and keeps the raw drawing for later", async () => {
     const result = await done(await scanPOST(scanRequest()));
-    expect(result.compass).toMatchObject({ visible: true, adjustable: true });
-    expect(result.compass?.rotation).toBeCloseTo(299.1, 1);
+    expect(result.compass).toMatchObject({ visible: true, rotation: 0, adjustable: true });
     expect(result.compass?.scanRotation).toBeCloseTo(299.1, 1);
     const base = result.savedImagePath.replace(/^generated\//, "raw/").replace(/\.png$/, "");
     expect(fake.storage.has(`${base}.png`)).toBe(true);
@@ -165,10 +216,10 @@ describe("compass choice on the convert routes", () => {
     expect(result.compass?.visible).toBe(false);
   });
 
-  it("ignores a malformed choice and falls back to the scan", async () => {
+  it("ignores a malformed choice and falls back to north-up", async () => {
     const result = await done(await scanPOST(scanRequest({ compass: { visible: "yes", rotation: "x" } })));
     expect(result.compass?.visible).toBe(true);
-    expect(result.compass?.rotation).toBeCloseTo(299.1, 1);
+    expect(result.compass?.rotation).toBe(0);
   });
 
   it("hides a photo's compass by default and honours form fields", async () => {
