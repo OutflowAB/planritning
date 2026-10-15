@@ -39,3 +39,11 @@ const SM_ROOM_LABEL_SIZE_RATIO = 0.015;
 export function roomLabelFontSize(canvasWidth: number) {
   return Math.max(12, Math.round(canvasWidth * SM_ROOM_LABEL_SIZE_RATIO));
 }
+
+/**
+ * The built-in sizes of hand-placed symbols, furniture, doors, windows and stairs were drawn for
+ * a ~1200 px wide plan. This scales them up to the canvas they are placed on.
+ */
+export function defaultObjectScale(canvasWidth: number) {
+  return Math.max(1, canvasWidth / 1200);
+}

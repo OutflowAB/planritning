@@ -86,35 +86,36 @@ export function createDefaultDimension(x: number, y: number): FloorplanObject {
   };
 }
 
-export function createDefaultDoor(x: number, y: number): FloorplanObject {
+/** `sizeScale` fits the default to the canvas; see defaultObjectScale. */
+export function createDefaultDoor(x: number, y: number, sizeScale = 1): FloorplanObject {
   return {
     id: createObjectId(),
     type: "door",
     ...createDefaultTransform(x, y),
-    width: 80,
+    width: 80 * sizeScale,
     swing: "right",
     strokeWidth: SM_EDITOR.wallStroke,
   };
 }
 
-export function createDefaultWindow(x: number, y: number): FloorplanObject {
+export function createDefaultWindow(x: number, y: number, sizeScale = 1): FloorplanObject {
   return {
     id: createObjectId(),
     type: "window",
     ...createDefaultTransform(x, y),
-    width: 67,
-    height: 14,
+    width: 67 * sizeScale,
+    height: 14 * sizeScale,
     strokeWidth: SM_EDITOR.dimensionStroke,
   };
 }
 
-export function createDefaultStair(x: number, y: number): FloorplanObject {
+export function createDefaultStair(x: number, y: number, sizeScale = 1): FloorplanObject {
   return {
     id: createObjectId(),
     type: "stair",
     ...createDefaultTransform(x, y),
-    width: 80,
-    height: 120,
+    width: 80 * sizeScale,
+    height: 120 * sizeScale,
     direction: "up",
     strokeWidth: SM_EDITOR.wallStroke,
   };

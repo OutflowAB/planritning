@@ -41,6 +41,7 @@ import {
 } from "@/lib/floorplan/history";
 import { getFurnitureById, getSymbolById } from "@/lib/floorplan/symbol-library";
 import { ApiError, apiFetch } from "@/lib/api-client";
+import { defaultObjectScale } from "@/lib/sm-floorplan-layout";
 import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
 import { renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-library";
 import { publishFloorplanImage } from "@/lib/floorplan/publish-floorplan";
@@ -85,6 +86,15 @@ function isTextInputTarget(target: EventTarget | null) {
   const tag = target.tagName;
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
 }
+
+/** Typical sizes in metres for things drawn by hand on a plan with a scale. */
+const REAL_SIZE_M = {
+  doorWidth: 0.9,
+  windowWidth: 1.2,
+  windowDepth: 0.15,
+  stairWidth: 1,
+  stairLength: 2.5,
+};
 
 export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEditorOptions) {
   const canvasRef = useRef<Canvas | null>(null);
@@ -404,6 +414,11 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
         return;
       }
 
+      // On a plan with a scale (a scan), new things get real sizes and measured labels; on any
+      // plan, built-in sizes are fitted to the canvas.
+      const pxPerMeter = document.scale?.pxPerMeter;
+      const sizeScale = defaultObjectScale(document.canvas.width);
+
       if (activeTool === "dimension") {
         if (!placementStartRef.current) {
           placementStartRef.current = point;
@@ -430,15 +445,39 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
         case "roomLabel":
           addObject(createDefaultRoomLabel(point.x, point.y));
           break;
-        case "door":
-          addObject(createDefaultDoor(point.x, point.y));
+        case "door": {
+          const door = createDefaultDoor(point.x, point.y, sizeScale);
+          addObject(
+            pxPerMeter ? ({ ...door, width: REAL_SIZE_M.doorWidth * pxPerMeter } as FloorplanObject) : door,
+          );
           break;
-        case "window":
-          addObject(createDefaultWindow(point.x, point.y));
+        }
+        case "window": {
+          const windowObject = createDefaultWindow(point.x, point.y, sizeScale);
+          addObject(
+            pxPerMeter
+              ? ({
+                  ...windowObject,
+                  width: REAL_SIZE_M.windowWidth * pxPerMeter,
+                  height: Math.max(REAL_SIZE_M.windowDepth * pxPerMeter, 6),
+                } as FloorplanObject)
+              : windowObject,
+          );
           break;
-        case "stair":
-          addObject(createDefaultStair(point.x, point.y));
+        }
+        case "stair": {
+          const stair = createDefaultStair(point.x, point.y, sizeScale);
+          addObject(
+            pxPerMeter
+              ? ({
+                  ...stair,
+                  width: REAL_SIZE_M.stairWidth * pxPerMeter,
+                  height: REAL_SIZE_M.stairLength * pxPerMeter,
+                } as FloorplanObject)
+              : stair,
+          );
           break;
+        }
         case "symbol": {
           const symbol = getSymbolById(selectedSymbolId);
           addObject(
@@ -446,8 +485,8 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
               point.x,
               point.y,
               selectedSymbolId,
-              symbol?.defaultWidth ?? 40,
-              symbol?.defaultHeight ?? 40,
+              (symbol?.defaultWidth ?? 40) * sizeScale,
+              (symbol?.defaultHeight ?? 40) * sizeScale,
             ),
           );
           break;
@@ -459,8 +498,8 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
               point.x,
               point.y,
               selectedFurnitureId,
-              furniture?.defaultWidth ?? 48,
-              furniture?.defaultHeight ?? 48,
+              (furniture?.defaultWidth ?? 48) * sizeScale,
+              (furniture?.defaultHeight ?? 48) * sizeScale,
             ),
           );
           break;

@@ -262,8 +262,6 @@ function createPathGroup(
   stroke: string,
   fill: string,
 ): Group {
-  const scaleX = width / 48;
-  const scaleY = height / 48;
   const items = paths.map(
     (pathData) =>
       new Path(pathData, {
@@ -280,8 +278,21 @@ function createPathGroup(
     originX: "left",
     originY: "top",
   });
-  group.scaleX = scaleX;
-  group.scaleY = scaleY;
+  // The drawing, not its 48-unit design box, fills the object's size, so a 0.6 m stove is
+  // 0.6 m wide on the plan.
+  group.scaleX = width / Math.max(group.width, 1);
+  group.scaleY = height / Math.max(group.height, 1);
+  return group;
+}
+
+/**
+ * Symbols and furniture: the scaled drawing inside an outer group. The outer group carries
+ * the object's own position and transform, so resizing it on the canvas round-trips like any
+ * other object instead of being overwritten by the drawing's scale.
+ */
+function createSymbolGroup(object: SymbolObject | FurnitureObject, paths: string[], common: Partial<FabricObject>) {
+  const group = new Group([createPathGroup(paths, object.width, object.height, object.stroke, object.fill)], common);
+  setFloorplanMeta(group, { floorplanId: object.id, floorplanType: object.type });
   return group;
 }
 
@@ -458,16 +469,7 @@ export function createFabricObjectFromFloorplan(object: FloorplanObject): Fabric
 
     case "symbol": {
       const definition = getSymbolById(object.symbolId);
-      const paths = definition?.paths ?? ["M4 4 h40 v40 h-40 Z"];
-      const group = createPathGroup(paths, object.width, object.height, object.stroke, object.fill);
-      group.set({
-        ...common,
-        data: {
-          floorplanId: object.id,
-          floorplanType: object.type,
-        },
-      });
-      return group;
+      return createSymbolGroup(object, definition?.paths ?? ["M4 4 h40 v40 h-40 Z"], common);
     }
 
     case "icon": {
@@ -492,16 +494,7 @@ export function createFabricObjectFromFloorplan(object: FloorplanObject): Fabric
 
     case "furniture": {
       const definition = getFurnitureById(object.furnitureId);
-      const paths = definition?.paths ?? ["M4 4 h40 v24 h-40 Z"];
-      const group = createPathGroup(paths, object.width, object.height, object.stroke, object.fill);
-      group.set({
-        ...common,
-        data: {
-          floorplanId: object.id,
-          floorplanType: object.type,
-        },
-      });
-      return group;
+      return createSymbolGroup(object, definition?.paths ?? ["M4 4 h40 v24 h-40 Z"], common);
     }
 
     case "eraserStroke":
