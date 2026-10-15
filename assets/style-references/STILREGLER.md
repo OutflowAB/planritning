@@ -20,14 +20,17 @@ som läggs på i efterhand och resultatet dubbleras.
 - fast inredning (kök, bad, trappor, öppen spis, garderober)
 - rumsnamn och förkortningsrutor
 
-**Kod lägger på** — bara två saker, i [`lib/image/brand-floorplan.ts`](../../lib/image/brand-floorplan.ts):
+**Kod lägger på** — det här, i [`lib/image/brand-floorplan.ts`](../../lib/image/brand-floorplan.ts):
 
 | Element | Hur |
 | --- | --- |
-| Svart ram | SVG-rektangel, 3 px linje, 30 px indrag från kanten |
-| SkandiaMäklarna-logotyp | `public/sm-logo.svg` skalas till 30 % av ritningens bredd och centreras under den |
+| Duk | A4 stående (1:√2, som referensernas 2879 × 4071 px). Ritningen centreras mellan rubriken och loggan, utan att skalas |
+| Svart ram | SVG-rektangel, linje 0,14 % av bladbredden, indrag 2 % från kanten |
+| Rubrik `PLANLÖSNING` | Versaler, fet, svart, centrerad överst. Ritas av kod som SVG-konturer ur `assets/fonts/` (Questrial, OFL; Neutra är licensierad och ersätter den senare, se README) |
+| Kompassros | Uppe till höger: ring med streck, ifylld svart nål, N/E/S/W i samma typsnitt. **Bara för Polycam-skanningar** där riktningen är känd; foton får ingen |
+| SkandiaMäklarna-logotyp | `public/sm-logo.svg` skalas till 24 % av bladbredden och centreras nära nederkanten |
 
-Koden sätter alltså ingen färg. Duken i 7:5 fylls med den bakgrundsfärg som **mäts upp ur
+Koden sätter alltså ingen färg. Duken fylls med den bakgrundsfärg som **mäts upp ur
 AI:ns egen bild** (`sampleDominantColor`), så utfyllnaden runt ritningen blir sömlös även om
 modellen träffar hexvärdet lite grann fel. Loggan ritas av kod eftersom en AI-ritad logotyp
 aldrig blir korrekt.
@@ -74,10 +77,9 @@ Det här är mönstren som återkommer i varenda bild och som därför är promp
 ## Sådant referenserna har som appen inte lägger på
 
 De här elementen finns i alla sex referensbilder men skapas varken av AI:n eller av koden
-i dag. Vill ni ha dem behöver de läggas till i `composeBrandedFloorplan`, inte i prompten:
+i dag (rubrik och kompassros läggs på av koden, se tabellen ovan). Vill ni ha dem behöver de läggas till i `composeBrandedFloorplan`, inte i prompten:
 
-- rubriken `PLANLÖSNING` överst
-- kompassros uppe till höger
+- kompassros på foton (finns bara på Polycam-skanningar, där riktningen är känd)
 - texten `OBSERVERA ATT PLANLÖSNINGEN INTE ÄR SKALENLIG` under ritningen
 - adressen nere till höger
 - våningsetikett som `ENTRÉPLAN` när ritningen visar ett av flera plan
@@ -139,4 +141,5 @@ Om den första bilden: den är inte ett foto utan en exakt planritning sedd rakt
 - Bilden innehåller ingen text. Skriv därför inga rumsnamn, inga förkortningar och ingen annan text alls.
 - Rita ingen inredning, inga vitvaror och inga trappor, eftersom skanningen inte visar dem.
 - Rita ingen entrépil, eftersom entrén inte går att avgöra ur skanningen.
+- Rita ingen rubrik, ingen kompassros, ingen ram och ingen logotyp. Rubriken och kompassen läggs på av koden efteråt.
 <!-- SCAN-PROMPT:END -->

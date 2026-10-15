@@ -20,6 +20,7 @@ import { createPortal } from "react-dom";
 import {
   areCompareImagesCached,
   ImageCompareSlider,
+  preloadCompareImageSrc,
   warmCompareImageCache,
   warmCompareImageSrc,
 } from "@/components/dashboard/image-compare-slider";
@@ -31,6 +32,7 @@ import { FloorplanDrawingAnimation } from "@/components/dashboard/floorplan-draw
 import { useToast } from "@/components/ui/toast-provider";
 import {
   readConvertStream,
+  type ConvertCompass,
   type ConvertDoneEvent,
   type ConvertLayout,
 } from "@/lib/floorplan/convert-stream";
@@ -41,6 +43,7 @@ import {
 import {
   CONVERTER_TRANSFER_KEY,
   hasPendingConverterTransfer,
+  setConverterConversionInFlight,
 } from "@/lib/startsida-converter-session";
 import {
   clearPendingGenerationReview,
@@ -56,6 +59,12 @@ import {
   setPendingSourceSelection,
 } from "@/lib/startsida-source-session";
 import { ApiError, apiFetch, apiJson } from "@/lib/api-client";
+import { StoreyGallery } from "@/components/dashboard/storey-gallery";
+import { StoreyPicker, StoreyProgress, storeyLabel, type StoreyOption } from "@/components/dashboard/storey-picker";
+import { markFloor, nextPendingFloor, replaceFloor, updateFloorImage, type StoreyFloor } from "@/lib/storey-floors";
+import { CompassControl } from "@/components/dashboard/compass-control";
+import { newFloorRun, parseFloorGroup } from "@/lib/floor-groups";
+import { defaultCompass, type CompassSettings } from "@/lib/image/compass-settings";
 import { dispatchGenerationUpdated } from "@/lib/app-events";
 import { imageUrl } from "@/lib/image-url";
 import type { ImageListItem } from "@/app/api/images/route";
@@ -516,6 +525,23 @@ function ComparePreviewSkeleton({ showWatermark = false }: { showWatermark?: boo
   );
 }
 
+/** The compass of one stored sheet as the review knows it. */
+type SheetCompassState = {
+  settings: CompassSettings;
+  /** The last choice the server composed, to fall back to if a change fails. */
+  saved: CompassSettings;
+  scanRotation: number | null;
+  adjustable: boolean;
+  reason?: string;
+};
+
+const COMPASS_DEBOUNCE_MS = 150;
+
+function sheetCompassFromConversion(compass: ConvertCompass): SheetCompassState {
+  const settings = { visible: compass.visible, rotation: compass.rotation };
+  return { settings, saved: settings, scanRotation: compass.scanRotation, adjustable: compass.adjustable };
+}
+
 export function FloorplanEnhancer() {
   const router = useRouter();
   const pathname = usePathname();
@@ -564,6 +590,22 @@ export function FloorplanEnhancer() {
   // which reuses the stored plan and tells the model what it is looking at.
   const [isScanSource, setIsScanSource] = useState(() => cachedReviewPreview.isScanSource);
   const [polycamLink, setPolycamLink] = useState("");
+  // Multi-storey scans: the floors to choose from, the run in progress, and every drawn floor
+  // with its review status. Any of them can be put in the review card, in any order.
+  const [isInspecting, setIsInspecting] = useState(false);
+  const [storeyChoice, setStoreyChoice] = useState<{ url: string; storeys: StoreyOption[] } | null>(null);
+  const [multiRun, setMultiRun] = useState<{ labels: string[]; done: number } | null>(null);
+  const [floors, setFloors] = useState<StoreyFloor[]>([]);
+  // The compass choice made before drawing (one per run), and the compass of every sheet shown.
+  const [plannedCompass, setPlannedCompass] = useState<CompassSettings>(() => defaultCompass(null));
+  const [plannedScanRotation, setPlannedScanRotation] = useState<number | null>(null);
+  const [sheetCompass, setSheetCompass] = useState<Record<number, SheetCompassState>>({});
+  const [compassPending, setCompassPending] = useState(false);
+  const [compassEditedIds, setCompassEditedIds] = useState<number[]>([]);
+  const compassTimerRef = useRef<number | null>(null);
+  const compassChainRef = useRef<Promise<void>>(Promise.resolve());
+  const resultImageIdRef = useRef<number | null>(null);
+  const [activeFloor, setActiveFloor] = useState<number | null>(null);
   const [previewImageType, setPreviewImageType] = useState<"source" | "result" | null>(null);
   const [previewZoom, setPreviewZoom] = useState(1);
   const [isCompareSliderReady, setIsCompareSliderReady] = useState(() =>
@@ -622,6 +664,12 @@ export function FloorplanEnhancer() {
   );
 
 
+  // Tells the host a job is running so leaving the page does not reset the converter.
+  useEffect(() => {
+    setConverterConversionInFlight(isSubmitting);
+    return () => setConverterConversionInFlight(false);
+  }, [isSubmitting]);
+
   useEffect(() => {
     return () => {
       revokeIfObjectUrl(sourcePreviewUrl);
@@ -665,6 +713,8 @@ export function FloorplanEnhancer() {
     setIsSubmitting(false);
     setSourceFile(null);
     setSourceImageId(null);
+    setFloors([]);
+    setActiveFloor(null);
     setIsDragActive(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -835,11 +885,52 @@ export function FloorplanEnhancer() {
   const isRestoringPendingSource = hasPendingSourceSelection() && !hasRestoredPendingSource;
   const showGenerationReview =
     Boolean(resultPreviewUrl && sourcePreviewUrl) || isRestoringPendingReview;
+  const activeFloorApproved =
+    activeFloor !== null && floors.length > 1 && floors[activeFloor]?.status === "approved";
   const isComparePreviewLoading =
     showGenerationReview && (!resultPreviewUrl || !sourcePreviewUrl || !alignedSourcePreviewUrl);
   const isCompareReviewReady = Boolean(
     alignedSourcePreviewUrl && resultPreviewUrl && isCompareSliderReady,
   );
+
+  useEffect(() => {
+    resultImageIdRef.current = resultImageId;
+  }, [resultImageId]);
+
+  // A review restored from the session knows no compass yet: ask the server what the sheet has.
+  useEffect(() => {
+    if (!resultImageId || sheetCompass[resultImageId]) {
+      return;
+    }
+    let cancelled = false;
+    void apiJson<{
+      visible: boolean;
+      rotation: number;
+      scanRotation: number | null;
+      adjustable: boolean;
+      reason?: string;
+    }>(`/api/recompose-sheet?imageId=${resultImageId}`)
+      .then((state) => {
+        if (cancelled) {
+          return;
+        }
+        const settings = { visible: state.visible, rotation: state.rotation };
+        setSheetCompass((previous) => ({
+          ...previous,
+          [resultImageId]: {
+            settings,
+            saved: settings,
+            scanRotation: state.scanRotation,
+            adjustable: state.adjustable,
+            reason: state.reason,
+          },
+        }));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [resultImageId, sheetCompass]);
 
   const handleCompareSliderReadyChange = useCallback((ready: boolean) => {
     setIsCompareSliderReady(ready);
@@ -1039,6 +1130,9 @@ export function FloorplanEnhancer() {
       if (sourceImageId) {
         payload.append("sourceImageId", String(sourceImageId));
       }
+      const { compass } = requestCompass();
+      payload.append("compassVisible", compass.visible ? "1" : "0");
+      payload.append("compassRotation", String(compass.rotation));
       // Why the previous attempt was rejected. Sent along so the next version can correct it
       // rather than being a blind re-roll.
       if (feedback) {
@@ -1060,6 +1154,77 @@ export function FloorplanEnhancer() {
     }
   }
 
+  function rememberCompass(conversion: ConvertDoneEvent) {
+    const { compass, savedImageId } = conversion;
+    if (!compass) {
+      return;
+    }
+    setSheetCompass((previous) => ({ ...previous, [savedImageId]: sheetCompassFromConversion(compass) }));
+  }
+
+  /** The compass to draw a new version with: what the shown sheet has, else the planned one. */
+  function requestCompass(): { compass: CompassSettings; scanRotation: number | null } {
+    const current = resultImageId ? sheetCompass[resultImageId] : undefined;
+    return current
+      ? { compass: current.settings, scanRotation: current.scanRotation }
+      : { compass: plannedCompass, scanRotation: plannedScanRotation };
+  }
+
+  /**
+   * A change to the shown sheet's compass: the control updates at once, the sheet is composed
+   * again on the server after a short pause (no new drawing, no credit), and its new picture
+   * replaces the old one when it has loaded.
+   */
+  function changeSheetCompass(next: CompassSettings) {
+    const imageId = resultImageId;
+    if (!imageId) {
+      return;
+    }
+    setSheetCompass((previous) =>
+      previous[imageId] ? { ...previous, [imageId]: { ...previous[imageId], settings: next } } : previous,
+    );
+    setCompassPending(true);
+    if (compassTimerRef.current !== null) {
+      window.clearTimeout(compassTimerRef.current);
+    }
+    compassTimerRef.current = window.setTimeout(() => {
+      compassTimerRef.current = null;
+      compassChainRef.current = compassChainRef.current.then(async () => {
+        try {
+          const result = await apiJson<{ savedImageUrl: string }>("/api/recompose-sheet", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ imageId, compass: next }),
+          });
+          await preloadCompareImageSrc(result.savedImageUrl).catch(() => undefined);
+          setSheetCompass((previous) =>
+            previous[imageId] ? { ...previous, [imageId]: { ...previous[imageId], saved: next } } : previous,
+          );
+          setCompassEditedIds((previous) => (previous.includes(imageId) ? previous : [...previous, imageId]));
+          setFloors((previous) => updateFloorImage(previous, imageId, result.savedImageUrl));
+          if (resultImageIdRef.current === imageId) {
+            setResultPreviewUrl(result.savedImageUrl);
+            const pending = getPendingGenerationReview();
+            if (pending?.resultImageId === imageId) {
+              setPendingGenerationReview({ ...pending, resultPreviewUrl: result.savedImageUrl });
+            }
+          }
+        } catch (error) {
+          setSheetCompass((previous) =>
+            previous[imageId]
+              ? { ...previous, [imageId]: { ...previous[imageId], settings: previous[imageId].saved } }
+              : previous,
+          );
+          setErrorMessage(error instanceof Error ? error.message : "Kunde inte ändra kompassen.");
+        } finally {
+          if (compassTimerRef.current === null) {
+            setCompassPending(false);
+          }
+        }
+      });
+    }, COMPASS_DEBOUNCE_MS);
+  }
+
   /** Shows a finished conversion for review and caches it, whichever route produced it. */
   function applyConversionResult(
     conversion: ConvertDoneEvent,
@@ -1068,6 +1233,7 @@ export function FloorplanEnhancer() {
   ) {
     const parsedSavedImageId = conversion.savedImageId;
     const parsedSourceImageId = conversion.sourceImageId;
+    rememberCompass(conversion);
     const savedImagePath = conversion.savedImagePath;
     if (parsedSourceImageId) {
       setSourceImageId(parsedSourceImageId);
@@ -1098,6 +1264,207 @@ export function FloorplanEnhancer() {
     dispatchGenerationUpdated();
   }
 
+  /** Puts a finished scan conversion up for review. */
+  function showScanResult(conversion: ConvertDoneEvent) {
+    // There is no local file: the plan the server drew from the scan is the original.
+    const scanPreviewUrl = imageUrl(conversion.sourceImageId, "full");
+    setSourceFile(null);
+    setSourcePreviewUrl((previous) => {
+      if (previous === scanPreviewUrl) {
+        return previous;
+      }
+      revokeIfObjectUrl(previous);
+      return scanPreviewUrl;
+    });
+    setIsScanSource(true);
+    setPolycamLink("");
+    applyConversionResult(conversion, scanPreviewUrl, "scan");
+  }
+
+  /** Puts one of the drawn floors in the review card. */
+  function selectFloor(index: number, list: StoreyFloor[] = floors) {
+    const floor = list[index];
+    if (!floor) {
+      return;
+    }
+    setActiveFloor(index);
+    setShowRejectForm(false);
+    setRejectComment("");
+    setErrorMessage("");
+    setPreviewZoom(1);
+    if (index !== activeFloor) {
+      setIsCompareSliderReady(false);
+      showScanResult(floor.conversion);
+    }
+  }
+
+  function enlargeFloor(index: number) {
+    selectFloor(index);
+    setPreviewImageType("result");
+  }
+
+  /** Marks the shown floor approved and moves on to one that is still open. Returns whether there was one. */
+  function finishActiveFloor() {
+    if (activeFloor === null || floors.length < 2) {
+      return false;
+    }
+    const updated = markFloor(floors, activeFloor, "approved");
+    setFloors(updated);
+    const next = nextPendingFloor(updated, activeFloor);
+    if (next < 0) {
+      return false;
+    }
+    selectFloor(next, updated);
+    return true;
+  }
+
+  /** Approves and saves every floor still open to Planritningar in one go. */
+  async function approveAllFloors() {
+    const open = floors.filter((floor) => floor.status !== "approved");
+    if (isReviewSubmitting || open.length === 0) {
+      return;
+    }
+
+    setErrorMessage("");
+    setIsReviewSubmitting(true);
+    try {
+      for (const { conversion } of open) {
+        const body = { imageId: conversion.savedImageId, filePath: conversion.savedImagePath };
+        await apiFetch("/api/review-generation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "approve", ...body }),
+        });
+        await apiFetch("/api/save-generation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        setFloors((previous) =>
+          previous.map((floor) =>
+            floor.conversion.savedImageId === conversion.savedImageId
+              ? { ...floor, status: "approved" }
+              : floor,
+          ),
+        );
+      }
+      clearPendingVerktygSave();
+      clearPendingGenerationReview();
+      dispatchGenerationUpdated();
+      const last = open[open.length - 1].conversion;
+      router.push(
+        buildPlanritningarHref(pathname, { imageId: last.savedImageId, imagePath: last.savedImagePath }),
+      );
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
+    } finally {
+      setIsReviewSubmitting(false);
+    }
+  }
+
+  /**
+   * Draws the chosen storeys one at a time, each as its own conversion (and its own
+   * generation). Every finished plan lands in the floor gallery; the first one is shown.
+   */
+  async function processPolycamStoreys(url: string, stories: number[], storeys: StoreyOption[]) {
+    if (isSubmitting) {
+      return;
+    }
+
+    const labels = stories.map((story) =>
+      storeyLabel(
+        storeys.findIndex((entry) => entry.story === story),
+        storeys.length,
+      ),
+    );
+    const results: ConvertDoneEvent[] = [];
+    // One id for the whole run, so the library can show these floors as one house.
+    const run = newFloorRun();
+
+    setErrorMessage("");
+    setStoreyChoice(null);
+    setIsSubmitting(true);
+    setProcessingStatusMessage(null);
+    setMultiRun({ labels, done: 0 });
+    setFloors([]);
+    setActiveFloor(null);
+
+    try {
+      for (const [index, story] of stories.entries()) {
+        const response = await apiFetch("/api/convert-polycam", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url,
+            story,
+            compass: plannedCompass,
+            floorGroup: {
+              run,
+              position: storeys.findIndex((entry) => entry.story === story),
+              total: storeys.length,
+            },
+          }),
+        });
+        results.push(
+          await readConvertStream(response, {
+            onStatus: (event) => setProcessingStatusMessage(`${labels[index]}: ${event.message}`),
+          }),
+        );
+        setMultiRun({ labels, done: index + 1 });
+      }
+    } catch (error) {
+      // Floors already drawn are kept and reviewable; only the failing one and later ones are lost.
+      const reason = error instanceof Error ? error.message : "Ett oväntat fel uppstod.";
+      setErrorMessage(
+        results.length > 0
+          ? `${labels[results.length]} kunde inte konverteras: ${reason}`
+          : reason,
+      );
+    } finally {
+      setIsSubmitting(false);
+      setProcessingStatusMessage(null);
+      setMultiRun(null);
+    }
+
+    const [first] = results;
+    results.forEach(rememberCompass);
+    if (first) {
+      setFloors(
+        results.map((conversion, index) => ({
+          label: labels[index],
+          conversion,
+          status: "pending" as const,
+        })),
+      );
+      setActiveFloor(0);
+      showScanResult(first);
+    }
+  }
+
+  /** Reads the scan first: a multi-storey one asks which floors to draw before anything is billed. */
+  async function inspectPolycamLink(link: string) {
+    setErrorMessage("");
+    setIsInspecting(true);
+    try {
+      const { storeys, compassRotation } = await apiJson<{
+        storeys: StoreyOption[];
+        compassRotation: number | null;
+      }>("/api/convert-polycam/inspect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: link }),
+      });
+      // Both the compass and (for several floors) the floors are settled before anything is drawn.
+      setPlannedScanRotation(compassRotation ?? null);
+      setPlannedCompass(defaultCompass(compassRotation ?? null));
+      setStoreyChoice({ url: link, storeys });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
+    } finally {
+      setIsInspecting(false);
+    }
+  }
+
   /**
    * Converts a Polycam capture. With a link, the server downloads and draws the scan; with
    * the id of a plan it drew before (a redraw), it reuses that plan without Polycam.
@@ -1110,6 +1477,14 @@ export function FloorplanEnhancer() {
       return;
     }
 
+    setStoreyChoice(null);
+    // A redraw of one floor of a multi-storey run keeps its place in the gallery.
+    const redoIndex = "sourceImageId" in target ? activeFloor : null;
+    if (redoIndex === null) {
+      setFloors([]);
+      setActiveFloor(null);
+    }
+
     setErrorMessage("");
     setIsSubmitting(true);
     setProcessingStatusMessage(null);
@@ -1118,26 +1493,29 @@ export function FloorplanEnhancer() {
       const response = await apiFetch("/api/convert-polycam", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...target, ...(feedback ? { feedback } : {}) }),
+        body: JSON.stringify({
+          ...target,
+          ...(feedback ? { feedback } : {}),
+          // A redraw keeps the sheet's compass; a fresh link uses what was chosen before drawing.
+          compass: requestCompass().compass,
+          // A redrawn floor stays in its house.
+          ...(redoIndex !== null && parseFloorGroup(floors[redoIndex]?.conversion.savedImagePath)
+            ? { floorGroup: parseFloorGroup(floors[redoIndex]?.conversion.savedImagePath) }
+            : {}),
+          ...("sourceImageId" in target && requestCompass().scanRotation !== null
+            ? { scanRotation: requestCompass().scanRotation }
+            : {}),
+        }),
       });
 
       const conversion = await readConvertStream(response, {
         onStatus: (event) => setProcessingStatusMessage(event.message),
       });
 
-      // There is no local file: the plan the server drew from the scan is the original.
-      const scanPreviewUrl = imageUrl(conversion.sourceImageId, "full");
-      setSourceFile(null);
-      setSourcePreviewUrl((previous) => {
-        if (previous === scanPreviewUrl) {
-          return previous;
-        }
-        revokeIfObjectUrl(previous);
-        return scanPreviewUrl;
-      });
-      setIsScanSource(true);
-      setPolycamLink("");
-      applyConversionResult(conversion, scanPreviewUrl, "scan");
+      if (redoIndex !== null) {
+        setFloors((previous) => replaceFloor(previous, redoIndex, conversion));
+      }
+      showScanResult(conversion);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Ett oväntat fel uppstod.");
     } finally {
@@ -1153,7 +1531,7 @@ export function FloorplanEnhancer() {
       return;
     }
 
-    void processPolycamLink({ url: link });
+    void inspectPolycamLink(link);
   }
 
   function startConversion() {
@@ -1226,6 +1604,11 @@ export function FloorplanEnhancer() {
           setSectionOverlayTarget(null);
           setRejectComment("");
           dispatchGenerationUpdated();
+          // More floors are waiting: stay here and review the next one instead of leaving.
+          if (finishActiveFloor()) {
+            showToast("Våningen är sparad. Nästa våning väntar på granskning.");
+            return;
+          }
           router.push(
             buildPlanritningarHref(pathname, {
               imageId: resultImageId,
@@ -1240,6 +1623,8 @@ export function FloorplanEnhancer() {
         setShowApproveDestinationModal(false);
         setSectionOverlayTarget(null);
         setRejectComment("");
+        // The editor takes this one; the next floor is ready for when the user comes back.
+        finishActiveFloor();
         router.push(
           buildVerktygHref(pathname, {
             imageId: resultImageId,
@@ -1484,7 +1869,10 @@ export function FloorplanEnhancer() {
       />
 
       {isSubmitting ? (
-        <ProcessingView statusMessage={processingStatusMessage} />
+        <>
+          <ProcessingView statusMessage={processingStatusMessage} />
+          {multiRun ? <StoreyProgress labels={multiRun.labels} done={multiRun.done} /> : null}
+        </>
       ) : (
         <>
           {showDropzone ? (
@@ -1515,7 +1903,25 @@ export function FloorplanEnhancer() {
             </label>
           ) : null}
 
-          {showDropzone ? (
+          {showDropzone && storeyChoice ? (
+            <StoreyPicker
+              storeys={storeyChoice.storeys}
+              onCancel={() => setStoreyChoice(null)}
+              compass={
+                <CompassControl
+                  value={plannedCompass}
+                  onChange={setPlannedCompass}
+                />
+              }
+              onConfirm={(stories) =>
+                storeyChoice.storeys.length === 1
+                  ? void processPolycamLink({ url: storeyChoice.url })
+                  : void processPolycamStoreys(storeyChoice.url, stories, storeyChoice.storeys)
+              }
+            />
+          ) : null}
+
+          {showDropzone && !storeyChoice ? (
             <form
               onSubmit={(event) => {
                 event.preventDefault();
@@ -1540,10 +1946,10 @@ export function FloorplanEnhancer() {
                 />
                 <button
                   type="submit"
-                  disabled={isSubmitting || polycamLink.trim().length === 0}
+                  disabled={isSubmitting || isInspecting || polycamLink.trim().length === 0}
                   className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  Hämta från Polycam
+                  {isInspecting ? "Läser skanningen..." : "Hämta från Polycam"}
                 </button>
               </div>
               <p className="text-xs text-[#7b746a]">
@@ -1591,7 +1997,14 @@ export function FloorplanEnhancer() {
                 onClick={openSourcePreview}
                 className="h-auto w-auto max-h-[min(60vh,640px)] max-w-full cursor-zoom-in bg-white"
               />
-              <div className="flex flex-wrap items-center justify-end gap-2 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+              <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-3 pt-3 leading-normal">
+                <CompassControl
+                  value={plannedCompass}
+                  onChange={setPlannedCompass}
+                  disabled={isSubmitting}
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2 bg-[#f7f4ef] px-4 py-3">
                 {errorMessage ? (
                   <button
                     type="button"
@@ -1614,6 +2027,17 @@ export function FloorplanEnhancer() {
             </figure>
           ) : null}
 
+          {showGenerationReview && floors.length > 1 ? (
+            <StoreyGallery
+              floors={floors}
+              activeIndex={activeFloor}
+              disabled={isReviewSubmitting}
+              onSelect={selectFloor}
+              onEnlarge={enlargeFloor}
+              onApproveAll={() => void approveAllFloors()}
+            />
+          ) : null}
+
           {showGenerationReview ? (
             <figure
               className={`mx-auto overflow-hidden rounded-none border border-[#d8d2c8] bg-white leading-none ${
@@ -1625,7 +2049,10 @@ export function FloorplanEnhancer() {
                   Före / Efter
                 </span>
                 {resultImageId ? (
-                  <span className="text-xs font-semibold text-[#6a6258]">{imageDisplayName(resultImageId)}</span>
+                  <span className="text-xs font-semibold text-[#6a6258]">
+                    {activeFloor !== null && floors.length > 1 ? `${floors[activeFloor]?.label} · ` : ""}
+                    {imageDisplayName(resultImageId)}
+                  </span>
                 ) : null}
               </figcaption>
               {isComparePreviewLoading ? (
@@ -1639,7 +2066,21 @@ export function FloorplanEnhancer() {
                   protectAfterImage={protectResultPreview}
                   loadingFallback={<ComparePreviewSkeleton showWatermark={protectResultPreview} />}
                   onReadyChange={handleCompareSliderReadyChange}
+                  playEntranceAnimation={!resultImageId || !compassEditedIds.includes(resultImageId)}
                 />
+              ) : null}
+              {isCompareReviewReady && resultImageId && sheetCompass[resultImageId] ? (
+                <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-3 py-3 leading-normal">
+                  <CompassControl
+                    value={sheetCompass[resultImageId].settings}
+                    onChange={changeSheetCompass}
+                    disabled={isReviewSubmitting}
+                    unavailableReason={
+                      sheetCompass[resultImageId].adjustable ? null : sheetCompass[resultImageId].reason ?? null
+                    }
+                    busy={compassPending}
+                  />
+                </div>
               ) : null}
               {isCompareReviewReady && alignedSourcePreviewUrl && showRejectForm ? (
                 <div className="space-y-3 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4">
@@ -1674,6 +2115,10 @@ export function FloorplanEnhancer() {
                     </button>
                   </div>
                 </div>
+              ) : activeFloorApproved ? (
+                <p className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4 text-center text-sm font-medium text-[#3f6b3f]">
+                  {floors[activeFloor ?? 0]?.label} är godkänd och sparad.
+                </p>
               ) : isCompareReviewReady && alignedSourcePreviewUrl ? (
                 <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4">
                   <p className="mb-3 text-center text-sm font-medium text-[#5c544a]">

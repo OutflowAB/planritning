@@ -25,6 +25,16 @@ export type ConvertStatusEvent = {
   engine?: ConvertEngine;
 };
 
+/** The compass the sheet was composed with, and whether it can still be changed. */
+export type ConvertCompass = {
+  visible: boolean;
+  rotation: number;
+  /** The scan's own direction; null for photos and scans without a heading. */
+  scanRotation: number | null;
+  /** False when the raw drawing could not be kept, so the sheet cannot be re-composed. */
+  adjustable: boolean;
+};
+
 export type ConvertDoneEvent = {
   type: "done";
   engine: ConvertEngine;
@@ -32,6 +42,7 @@ export type ConvertDoneEvent = {
   savedImagePath: string;
   savedImageUrl: string | null;
   sourceImageId: number;
+  compass?: ConvertCompass;
   compareBefore: string;
   result: string;
   layout: ConvertLayout;

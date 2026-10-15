@@ -33,6 +33,39 @@ export async function exportLibraryFloorplan(input: ExportLibraryFloorplanInput)
   await exportFromImageUrl(input.fallbackUrl, input.format, input.fileName);
 }
 
+/** Every floor of a house as one PDF, a page each at the sheet's own size, in the order given. */
+export async function exportFloorImagesToPdf(imageUrls: string[], fileName: string) {
+  if (imageUrls.length === 0) {
+    throw new Error("Ingen bild att exportera.");
+  }
+
+  let pdf: jsPDF | null = null;
+  for (const url of imageUrls) {
+    const image = await loadImage(url);
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    const canvasElement = window.document.createElement("canvas");
+    canvasElement.width = width;
+    canvasElement.height = height;
+    const context = canvasElement.getContext("2d");
+    if (!context) {
+      throw new Error("Kunde inte skapa exportyta.");
+    }
+    context.drawImage(image, 0, 0);
+    const dataUrl = canvasElement.toDataURL("image/jpeg", 0.92);
+    const orientation = width >= height ? "landscape" : "portrait";
+
+    if (pdf) {
+      pdf.addPage([width, height], orientation);
+    } else {
+      pdf = new jsPDF({ orientation, unit: "px", format: [width, height] });
+    }
+    pdf.addImage(dataUrl, "JPEG", 0, 0, width, height);
+  }
+
+  pdf?.save(`${sanitizeFileName(fileName)}.pdf`);
+}
+
 async function loadFloorplanDocument(
   imageId: number,
   imagePath: string,

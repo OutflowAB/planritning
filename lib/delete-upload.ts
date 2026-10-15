@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { rawImagePath, rawMetaPath } from "@/lib/image/sheet-source";
 
 type ImageRow = {
   id: number;
@@ -104,6 +105,10 @@ export async function deleteUploadRecord(
   // Thumbnails are derivatives keyed by the source name plus a version tag, so they are found
   // by prefix rather than by an exact path.
   const thumbnailPaths: string[] = [];
+  // The raw drawing and settings kept beside a generated sheet (see lib/image/sheet-source.ts).
+  const rawSheetPaths = storagePaths
+    .filter((storagePath) => storagePath.startsWith("generated/"))
+    .flatMap((storagePath) => [rawImagePath(storagePath), rawMetaPath(storagePath)]);
   for (const sourcePath of storagePaths) {
     const baseName = sourcePath.split("/").pop()?.replace(/\.[^.]+$/, "");
     if (!baseName) continue;
@@ -119,7 +124,7 @@ export async function deleteUploadRecord(
 
   const { error: storageError } = await supabase.storage
     .from("planritningar")
-    .remove([...storagePaths, ...thumbnailPaths]);
+    .remove([...storagePaths, ...thumbnailPaths, ...rawSheetPaths]);
   if (storageError) {
     return {
       ok: false,

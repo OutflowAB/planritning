@@ -9,14 +9,17 @@ import {
 } from "@/lib/floorplan/run-conversion";
 import { fetchRoomplan, PolycamError } from "@/lib/polycam/fetch-roomplan";
 import { parseRoomplan } from "@/lib/polycam/parse-roomplan";
+import { compassRotationFromScan } from "@/lib/polycam/compass";
 import { renderPlan } from "@/lib/polycam/render-plan";
 import { parsePolycamCaptureId, polycamCaptureUrl } from "@/lib/polycam/url";
+import { parseFloorGroupInput } from "@/lib/floor-groups";
+import { normaliseRotation, parseCompassSettings } from "@/lib/image/compass-settings";
 import { requireRole } from "@/lib/server-auth";
 import {
   BUCKET_NAME,
   getAdminSupabase,
+  SCAN_UPLOADS_PREFIX,
   serverConfigMissingResponse,
-  UPLOADS_PREFIX,
   UPLOADS_TABLE,
 } from "@/lib/supabase-server";
 
@@ -33,7 +36,7 @@ function badRequest(message: string, status = 400) {
 }
 
 /**
- * POST /api/convert-polycam  { url?, sourceImageId?, feedback? }
+ * POST /api/convert-polycam  { url?, story?, sourceImageId?, feedback? }
  *
  * Converts a public Polycam capture into a house-style floor plan. The scan is drawn as a
  * plain top-down plan, stored in uploads/ as the source image, and then run through exactly
@@ -67,6 +70,15 @@ export async function POST(request: Request) {
     typeof body.feedback === "string" && body.feedback.trim().length > 0
       ? body.feedback.trim().slice(0, 1000)
       : undefined;
+  // Which storey of a multi-storey scan to draw; absent means the lowest.
+  const story =
+    typeof body.story === "number" && Number.isInteger(body.story) && Math.abs(body.story) <= 100
+      ? body.story
+      : undefined;
+  // The broker's compass choice for this run; absent or malformed falls back to the scan's.
+  const compass = parseCompassSettings(body.compass);
+  // Set when this is one floor of a multi-floor house, so the floors are kept together.
+  const floorGroup = parseFloorGroupInput(body.floorGroup);
   const sourceImageId = parseSourceImageId(body.sourceImageId);
   const captureId = sourceImageId === null ? parsePolycamCaptureId(body.url) : null;
 
@@ -89,12 +101,13 @@ export async function POST(request: Request) {
       .eq("id", sourceImageId)
       .maybeSingle();
 
-    // Only a stored plan can be redrawn this way: every scan source is a PNG in uploads/.
+    // Only a plan this route drew can be redrawn: any other upload (a photo) would be sent to
+    // the model as a scan. Scan sources are PNGs stored under SCAN_UPLOADS_PREFIX.
     const isStoredPlan =
       !error &&
       row &&
       typeof row.file_path === "string" &&
-      row.file_path.startsWith(UPLOADS_PREFIX) &&
+      row.file_path.startsWith(SCAN_UPLOADS_PREFIX) &&
       row.mime_type === "image/png";
     const download = isStoredPlan
       ? await supabase.storage.from(BUCKET_NAME).download(row.file_path)
@@ -113,6 +126,11 @@ export async function POST(request: Request) {
   return createConversionStream(async (send) => {
     let inputBuffer: Buffer;
     let source: ConversionSource;
+    // A fresh scan carries its direction; a redraw from the stored plan image is told it.
+    let scanRotationDegrees: number | null =
+      typeof body.scanRotation === "number" && Number.isFinite(body.scanRotation)
+        ? normaliseRotation(body.scanRotation)
+        : null;
 
     if (storedSource) {
       inputBuffer = storedSource.buffer;
@@ -124,11 +142,11 @@ export async function POST(request: Request) {
         const roomplan = parseRoomplan(await fetchRoomplan(id, { signal: request.signal }));
 
         send({ type: "status", message: "Ritar upp planen" });
-        const plan = await renderPlan(roomplan);
-        if (plan.storyCount > 1) {
+        const plan = await renderPlan(roomplan, { story });
+        if (plan.storyCount > 1 && story === undefined) {
           send({
             type: "status",
-            message: `Skanningen har ${plan.storyCount} våningar. Bara den första ritas.`,
+            message: `Skanningen har ${plan.storyCount} våningar. Bara den nedersta ritas.`,
           });
         }
 
@@ -147,6 +165,10 @@ export async function POST(request: Request) {
         );
 
         inputBuffer = plan.png;
+        scanRotationDegrees = compassRotationFromScan(
+          roomplan.orientationDegrees,
+          roomplan.alignment,
+        );
         source = {
           fileName: `polycam-${id}.png`,
           mimeType: "image/png",
@@ -167,6 +189,9 @@ export async function POST(request: Request) {
       source,
       feedback,
       sourceKind: "scan",
+      scanRotationDegrees,
+      compass,
+      floorGroup,
       signal: request.signal,
       send,
     });

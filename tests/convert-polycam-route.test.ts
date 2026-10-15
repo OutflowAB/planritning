@@ -11,11 +11,10 @@ import { createFakeSupabase, type FakeSupabase } from "./helpers/fake-supabase";
 const mocks = vi.hoisted(() => ({
   supabase: null as unknown,
   generate: vi.fn(),
+  requireRole: vi.fn(),
 }));
 
-vi.mock("@/lib/server-auth", () => ({
-  requireRole: vi.fn(async () => ({ ok: true, role: "user" })),
-}));
+vi.mock("@/lib/server-auth", () => ({ requireRole: mocks.requireRole }));
 
 vi.mock("@/lib/supabase-server", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/supabase-server")>()),
@@ -58,6 +57,8 @@ beforeAll(async () => {
 beforeEach(() => {
   fake = createFakeSupabase();
   mocks.supabase = fake.client;
+  mocks.requireRole.mockReset();
+  mocks.requireRole.mockResolvedValue({ ok: true, role: "user" });
   mocks.generate.mockReset();
   mocks.generate.mockImplementation(async () => ({
     buffer: referencePng,
@@ -104,6 +105,18 @@ async function collect(response: Response) {
 }
 
 describe("POST /api/convert-polycam", () => {
+  it.each([401, 403])("answers %i before any fetch or database call when the role check fails", async (status) => {
+    mocks.requireRole.mockResolvedValueOnce({
+      ok: false,
+      response: new Response(JSON.stringify({ message: "Nej" }), { status }),
+    });
+    const response = await POST(jsonRequest({ url: `https://poly.cam/capture/${ID}` }));
+    expect(response.status).toBe(status);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fake.calls).toEqual([]);
+    expect(mocks.generate).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["no link", {}],
     ["another host", { url: `https://evil.example.com/capture/${ID}` }],
@@ -164,7 +177,7 @@ describe("POST /api/convert-polycam", () => {
 
     // The rendered plan is the stored source, so the compare slider and cascade delete work.
     const source = fake.table.get(done.sourceImageId);
-    expect(source?.file_path).toMatch(/^uploads\/\d+-[0-9a-f-]+\.png$/);
+    expect(source?.file_path).toMatch(/^uploads\/polycam-\d+-[0-9a-f-]+\.png$/);
     expect(source?.mime_type).toBe("image/png");
     const storedSource = fake.storage.get(source?.file_path as string);
     expect((await sharp(storedSource).metadata()).height).toBe(2560);
@@ -211,7 +224,11 @@ describe("POST /api/convert-polycam", () => {
       value && typeof value === "object"
         ? Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, shape(inner)]))
         : typeof value;
-    expect(shape(scanDone)).toEqual(shape(photoDone));
+    // The compass block differs by design: a scan knows its direction, a photo does not.
+    const { compass: scanCompass, ...scanRest } = scanDone;
+    const { compass: photoCompass, ...photoRest } = photoDone;
+    expect(Object.keys(scanCompass ?? {})).toEqual(Object.keys(photoCompass ?? {}));
+    expect(shape(scanRest)).toEqual(shape(photoRest));
   });
 
   it.each([
@@ -238,6 +255,13 @@ describe("POST /api/convert-polycam", () => {
     );
   });
 
+  it("reports a storey the scan does not have, before any generation", async () => {
+    await expect(
+      collect(await POST(jsonRequest({ url: `https://poly.cam/capture/${ID}`, story: 5 }))),
+    ).rejects.toThrow("Den valda våningen finns inte i skanningen.");
+    expect(mocks.generate).not.toHaveBeenCalled();
+  });
+
   it("redraws from the stored plan without contacting Polycam", async () => {
     const storedPlan = await sharp({
       create: { width: 600, height: 400, channels: 3, background: { r: 255, g: 255, b: 255 } },
@@ -245,8 +269,8 @@ describe("POST /api/convert-polycam", () => {
       .png()
       .toBuffer();
     fake = createFakeSupabase({
-      rows: [{ id: 42, file_name: "bild-42.png", file_path: "uploads/plan.png", mime_type: "image/png" }],
-      objects: { "uploads/plan.png": storedPlan },
+      rows: [{ id: 42, file_name: "bild-42.png", file_path: "uploads/polycam-plan.png", mime_type: "image/png" }],
+      objects: { "uploads/polycam-plan.png": storedPlan },
     });
     mocks.supabase = fake.client;
 
@@ -259,13 +283,17 @@ describe("POST /api/convert-polycam", () => {
     expect(done.sourceImageId).toBe(42);
     const call = mocks.generate.mock.calls[0][0];
     expect(call).toMatchObject({ sourceKind: "scan", feedback: "Större fönster.", sourceWidth: 600 });
-    // The source is reused, not stored again: only the result and its thumbnail are uploaded.
-    expect(fake.calls.filter((entry) => entry.op === "upload")).toHaveLength(2);
+    // The source is reused, not stored again: only the result, its thumbnail and
+    // the raw drawing with its settings (for the compass control) are uploaded.
+    const uploads = fake.calls.filter((entry) => entry.op === "upload").map((entry) => String(entry.payload));
+    expect(uploads).toHaveLength(4);
+    expect(uploads.some((upload) => upload.startsWith("uploads/"))).toBe(false);
   });
 
   it.each([
     ["an unknown id", {}],
     ["a generated image", { 42: "generated/x.png" }],
+    ["a photo upload", { 42: "uploads/1791-photo.png" }],
   ])("refuses to redraw from %s", async (_label, paths: Record<number, string>) => {
     fake = createFakeSupabase({
       rows: Object.entries(paths).map(([id, filePath]) => ({

@@ -41,7 +41,24 @@ function StartsidaConverterPortal({
   const fromUploadParam = searchParams.get("fromUpload");
   const isStartsida = pathname === "/startsida";
   const [resetKey, setResetKey] = useState("persistent");
-  const portalTarget = isStartsida && slot ? slot : fallbackEl;
+  // One stable element the converter always renders into. React remounts a portal's children
+  // when the container changes, which wiped a running conversion on every navigation; instead
+  // this element is moved between the page slot and the hidden fallback.
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
+  const parentEl = isStartsida && slot ? slot : fallbackEl;
+
+  useEffect(() => {
+    const element = document.createElement("div");
+    element.className = "flex w-full justify-center";
+    // Queued: creating DOM must not drive state during hydration.
+    queueMicrotask(() => setContainer(element));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (container && parentEl && container.parentNode !== parentEl) {
+      parentEl.appendChild(container);
+    }
+  }, [container, parentEl]);
 
   useEffect(() => {
     if (!isStartsida) {
@@ -77,11 +94,11 @@ function StartsidaConverterPortal({
     };
   }, [fromUploadParam]);
 
-  if (!portalTarget) {
+  if (!container) {
     return null;
   }
 
-  return createPortal(<FloorplanEnhancer key={resetKey} />, portalTarget);
+  return createPortal(<FloorplanEnhancer key={resetKey} />, container);
 }
 
 type StartsidaConverterProviderProps = {

@@ -120,6 +120,7 @@ describe("POST /api/convert", () => {
     expect(Object.keys(done).sort()).toEqual(
       [
         "compareBefore",
+        "compass",
         "engine",
         "layout",
         "result",
@@ -145,7 +146,7 @@ describe("POST /api/convert", () => {
     expect(generated?.source_upload_id).toBe(done.sourceImageId);
     expect(generated?.file_name).toBe(`bild-${done.savedImageId}.png`);
     expect(mocks.generate).toHaveBeenCalledTimes(1);
-    expect(mocks.generate.mock.calls[0][0]).not.toHaveProperty("sourceKind", "scan");
+    expect(mocks.generate.mock.calls[0][0]).toHaveProperty("sourceKind", "photo");
     // The source link column belongs to scans; a photo upload never touches it.
     expect(JSON.stringify(fake.calls)).not.toContain("source_url");
   });
@@ -159,7 +160,7 @@ describe("POST /api/convert", () => {
     );
 
     expect(done.sourceImageId).toBe(7);
-    expect(fake.calls.filter((call) => call.op === "upload")).toHaveLength(2); // result + thumbnail
+    expect(fake.calls.filter((call) => call.op === "upload")).toHaveLength(4); // result, thumbnail, raw drawing and its settings
     expect(mocks.generate.mock.calls[0][0].feedback).toBe("tjockare väggar");
   });
 

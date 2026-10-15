@@ -49,6 +49,28 @@ Appen kor pa [http://localhost:3000](http://localhost:3000).
 logotyp och ram via `sharp`. Bilderna i `assets/style-references/` skickas med som
 stilreferenser - se `assets/style-references/README.md`.
 
+### Planritningsbladet (A4 stående)
+
+Resultatet är ett A4-blad i stående format (1:√2) med ram, rubriken `PLANLÖSNING`, logotyp
+och - bara för Polycam-skanningar där riktningen är känd - en kompassros uppe till höger.
+Allt utom själva ritningen ritas av kod i `lib/image/brand-floorplan.ts`, aldrig av AI:n.
+
+**Typsnitt.** Kundens sajt använder det licensierade typsnittet Neutra, som vi inte får
+leverera med koden. Rubriken och kompassbokstäverna använder i stället Questrial (SIL OFL,
+`assets/fonts/Questrial-Regular.ttf`, licens i `assets/fonts/Questrial-OFL.txt`). Texten
+omvandlas till SVG-konturer (`lib/image/sheet-font.ts`), så ingen systemfont behövs på servern.
+
+Byta till Neutra när licensen finns:
+
+1. Lägg Neutra-filen (`.ttf` eller `.otf`) i `assets/fonts/`. Checka inte in den om
+   licensen förbjuder det - lägg den då på servern vid deploy.
+2. Ändra `SHEET_FONT_FILE` i `lib/image/sheet-font.ts` till filnamnet.
+3. Har filen ett riktigt fetstilsnitt: sätt `SHEET_FONT_EMBOLDEN_EM` till `0`.
+   (Questrial finns bara i normalvikt, så fetstilen görs där med en kontur runt tecknen.)
+
+`next.config.ts` bundlar hela `assets/fonts/` för sidorna som komponerar blad, så ingen mer
+ändring behövs. Å, Ä och Ö måste finnas i den nya filen.
+
 Miljovariabler:
 
 | Variabel | Standard | Beskrivning |
@@ -84,7 +106,10 @@ Begransningar:
   (Space/Floorplan). Andra skanningar saknar planritningsdata och ger ett tydligt fel.
 - Skanningen maste vara delad som publik lank. Privata lankar ger felet "privat eller
   felaktig".
-- Bara den forsta vaningen ritas om skanningen har flera.
+- Har skanningen flera vaningar fragar appen vilka som ska ritas innan nagot genereras
+  (`POST /api/convert-polycam/inspect` laser bara filen). Varje vald vaning ar en egen
+  konvertering och en egen generation; de granskas en i taget. Ej granskade vaningar finns
+  bara i webblasarens minne och forsvinner vid omladdning.
 - Rumsnamn, inredning och entrepil kommer inte fran skanningen och ritas inte; de laggs till
   i editorn. Saknar skanningen en vagg saknas den aven i planen.
 - Polycam har inget publikt API. Hamtningen anvander samma odokumenterade adress som
@@ -92,6 +117,10 @@ Begransningar:
   felmeddelande och bilduppladdningen fungerar som vanligt. Servern hamtar aldrig den
   inklistrade texten, bara en adress den bygger sjalv fran skanningens id, och foljer bara
   en omdirigering till Polycams lagring. Skanningens GPS-position (`latLonAlt`) lases aldrig.
+
+Bara planer som skapats fran en lank kan ritas om via `sourceImageId`; de kanns igen pa att
+originalbilden ligger under `uploads/polycam-` i lagringen. Det kraver ingen kolumn eller
+migration (planer fran innan andringen kan inte ritas om och far klistra in lanken igen).
 
 Lanken sparas i kolumnen `uploaded_images.source_url` nar migrationen
 `database/2026-10-14-uploaded-images-source-url.sql` ar kord. Innan dess fungerar allt som
