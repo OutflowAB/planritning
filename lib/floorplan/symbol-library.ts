@@ -191,6 +191,9 @@ export const FLOORPLAN_FURNITURE: FurnitureDefinition[] = [
   },
 ];
 
+/** Built to measure, so stretched to any length and depth rather than scaled: counters and wardrobes. */
+export const STRETCHABLE_SYMBOL_IDS: ReadonlySet<string> = new Set(["bankskiva", "garderob"]);
+
 export function getSymbolById(symbolId: string) {
   return FLOORPLAN_SYMBOLS.find((symbol) => symbol.id === symbolId) ?? null;
 }
@@ -207,4 +210,40 @@ export function uprightBox(width: number, height: number, rotation: number) {
 
 export function getFurnitureById(furnitureId: string) {
   return FLOORPLAN_FURNITURE.find((item) => item.id === furnitureId) ?? null;
+}
+
+/**
+ * Size of an appliance's abbreviation in a box of this size: letters about a third of the box
+ * tall, narrowed so three-letter codes (K/F, U/M) still fit. Only symbols with a `text` have one.
+ */
+export function abbreviationFontSize(width: number, height: number, text: string) {
+  return Math.min(height * 0.36, (width * 0.7) / (text.length * 0.6));
+}
+
+/**
+ * The size of an abbreviation's letters on the plan: the size chosen for them, else fitted to the
+ * box. Letters stand upright however the box is turned, so they are fitted, and held, to fit it
+ * both along and across; a chosen size larger than that is held to the largest that fits.
+ * Undefined for symbols without letters.
+ */
+export function abbreviationTextSize(symbol: {
+  symbolId: string;
+  width: number;
+  height: number;
+  scaleX: number;
+  scaleY: number;
+  textSize?: number;
+}) {
+  const text = getSymbolById(symbol.symbolId)?.text;
+  if (!text) return undefined;
+  const width = symbol.width * symbol.scaleX;
+  const height = symbol.height * symbol.scaleY;
+  const fitted = Math.min(abbreviationFontSize(width, height, text), abbreviationFontSize(height, width, text));
+  const largest = Math.min(largestAbbreviationSize(width, height, text), largestAbbreviationSize(height, width, text));
+  return symbol.textSize ? Math.min(symbol.textSize, largest) : fitted;
+}
+
+/** The largest letters that still fit inside the box, with a little room around them. */
+function largestAbbreviationSize(width: number, height: number, text: string) {
+  return Math.min(height * 0.8, (width * 0.9) / (text.length * 0.6));
 }

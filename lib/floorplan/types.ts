@@ -91,6 +91,8 @@ export type SymbolObject = FloorplanObjectBase & {
   height: number;
   fill: string;
   stroke: string;
+  /** The abbreviation's letter size, kept once the box has been resized so the letters do not grow with it. */
+  textSize?: number;
 };
 
 export type IconObject = FloorplanObjectBase & {

@@ -25,7 +25,7 @@ import type {
   SymbolObject,
 } from "@/lib/floorplan/types";
 import { SM_EDITOR, SM_INK } from "@/lib/sm-floorplan-layout";
-import { CANVA_PURPLE, CANVA_SELECTION_PROPS } from "@/lib/floorplan/fabric/canva-controls";
+import { CANVA_PURPLE, CANVA_SELECTION_PROPS, createWallControls } from "@/lib/floorplan/fabric/canva-controls";
 
 const FLOORPLAN_DATA_KEY = "floorplan";
 const FLOORPLAN_BACKGROUND_KEY = "floorplan-background";
@@ -328,6 +328,7 @@ export function createFabricObjectFromFloorplan(object: FloorplanObject): Fabric
         stroke: SM_INK,
         strokeWidth: object.strokeWidth,
         strokeLineCap: "square",
+        controls: createWallControls(),
       });
 
     case "roomLabel":
