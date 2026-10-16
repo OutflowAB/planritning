@@ -66,7 +66,7 @@ export function EditorToolbar({ controller, isLoading = false }: EditorToolbarPr
   return (
     <aside
       className={`flex shrink-0 border-b border-stone-100 bg-stone-50 px-2 ${
-        expandedLibraryView ? "h-40" : "h-28"
+        expandedLibraryView ? "min-h-40" : "h-28"
       } ${subViewTitle ? "flex-col py-2" : "items-center"} ${isLoading ? "pointer-events-none opacity-60" : ""}`}
       aria-busy={isLoading}
     >
@@ -263,6 +263,40 @@ function SelectedObjectFields({
             />
           </>
         );
+      case "symbol": {
+        // A counter, wardrobe or appliance at its real size: what it measures along its front and
+        // how deep it is. Any earlier resize on the canvas is folded in.
+        const length = selected.width * selected.scaleX;
+        const depth = selected.height * selected.scaleY;
+        const resize = (next: { width?: number; height?: number }) =>
+          controller.updateSelectedObject({
+            width: next.width ?? length,
+            height: next.height ?? depth,
+            scaleX: 1,
+            scaleY: 1,
+          });
+        return scale ? (
+          <>
+            <NumberField
+              label="Längd (m)"
+              value={Math.round((length / scale.pxPerMeter) * 100) / 100}
+              step={0.05}
+              onChange={(value) => value > 0 && resize({ width: value * scale.pxPerMeter })}
+            />
+            <NumberField
+              label="Djup (m)"
+              value={Math.round((depth / scale.pxPerMeter) * 100) / 100}
+              step={0.05}
+              onChange={(value) => value > 0 && resize({ height: value * scale.pxPerMeter })}
+            />
+          </>
+        ) : (
+          <>
+            <NumberField label="Bredd" value={Math.round(length)} onChange={(value) => value > 0 && resize({ width: value })} />
+            <NumberField label="Höjd" value={Math.round(depth)} onChange={(value) => value > 0 && resize({ height: value })} />
+          </>
+        );
+      }
       case "wall":
         return (
           <>
