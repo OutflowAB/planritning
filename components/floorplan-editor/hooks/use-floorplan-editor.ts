@@ -46,6 +46,7 @@ import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
 import { renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-library";
 import { publishFloorplanImage } from "@/lib/floorplan/publish-floorplan";
 import { imageDownloadBaseName } from "@/lib/image-naming";
+import { setHandleScale } from "@/lib/floorplan/fabric/canva-controls";
 import { snapFloorplanObjectPosition } from "@/lib/floorplan/fabric/object-snapping";
 import { formatMeters, lineLengthInMeters } from "@/lib/floorplan/measure";
 import { originalDocument } from "@/lib/floorplan/original-document";
@@ -348,6 +349,8 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
         },
         { cssOnly: true },
       );
+      setHandleScale(canvas.getWidth() / size.width);
+      canvas.getActiveObject()?.setCoords();
       canvas.requestRenderAll();
     },
     [],
