@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import type { FloorplanEditorController } from "@/components/floorplan-editor/hooks/use-floorplan-editor";
+import { flipDoorSide } from "@/lib/floorplan/door";
 import { formatMeters, formatSquareMeters, lineLengthInMeters, totalRoomArea } from "@/lib/floorplan/measure";
 import { FLOORPLAN_FURNITURE, FLOORPLAN_SYMBOLS } from "@/lib/floorplan/symbol-library";
 import type { EditorTool } from "@/lib/floorplan/types";
@@ -241,6 +242,14 @@ function SelectedObjectFields({
                 })
               }
             />
+            {/* A scan cannot tell which way a door opens; this flips it to the wall's other side. */}
+            <button
+              type="button"
+              onClick={() => controller.updateSelectedObject(flipDoorSide(selected))}
+              className="shrink-0 rounded-none border border-[#d8d2c8] bg-white px-3 py-1.5 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
+            >
+              Byt sida
+            </button>
           </>
         );
       case "window":
