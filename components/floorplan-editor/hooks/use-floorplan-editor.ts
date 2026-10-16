@@ -47,7 +47,7 @@ import { renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-libr
 import { publishFloorplanImage } from "@/lib/floorplan/publish-floorplan";
 import { imageDownloadBaseName } from "@/lib/image-naming";
 import { setHandleScale } from "@/lib/floorplan/fabric/canva-controls";
-import { snapFloorplanObjectPosition } from "@/lib/floorplan/fabric/object-snapping";
+import { snapFloorplanObjectPosition, snapToWallsAndCounters } from "@/lib/floorplan/fabric/object-snapping";
 import { formatMeters, lineLengthInMeters } from "@/lib/floorplan/measure";
 import { originalDocument } from "@/lib/floorplan/original-document";
 import { rotatePlanQuarterTurn } from "@/lib/floorplan/rotate-plan";
@@ -211,6 +211,10 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
       });
       canvas.on("selection:cleared", () => {
         setSelectedObjectId(null);
+      });
+      // Registered after the alignment guides, so a wall or counter has the last word.
+      canvas.on("object:moving", (event) => {
+        snapToWallsAndCounters(canvas, event.target);
       });
       canvas.on("object:modified", (event) => {
         if (canvas.isDrawingMode) {

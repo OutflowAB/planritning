@@ -618,6 +618,11 @@ type PartialBase = {
   visible?: boolean;
 };
 
+/** The plan object a canvas object was drawn from, as last stored on it. */
+export function getStoredFloorplanObject(object: FabricObject) {
+  return object.get(FLOORPLAN_DATA_KEY) as FloorplanObject | undefined;
+}
+
 function readExtendedObject(object: FabricObject, base: PartialBase): FloorplanObject | null {
   const stored = object.get(FLOORPLAN_DATA_KEY) as FloorplanObject | undefined;
   if (!stored) {
