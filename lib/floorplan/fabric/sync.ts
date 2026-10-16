@@ -15,6 +15,7 @@ import {
 import {
   getFurnitureById,
   getSymbolById,
+  STRETCHABLE_SYMBOL_IDS,
 } from "@/lib/floorplan/symbol-library";
 import type {
   EraserStrokeObject,
@@ -25,7 +26,12 @@ import type {
   SymbolObject,
 } from "@/lib/floorplan/types";
 import { SM_EDITOR, SM_INK } from "@/lib/sm-floorplan-layout";
-import { CANVA_PURPLE, CANVA_SELECTION_PROPS, createWallControls } from "@/lib/floorplan/fabric/canva-controls";
+import {
+  CANVA_PURPLE,
+  CANVA_SELECTION_PROPS,
+  createStretchControls,
+  createWallControls,
+} from "@/lib/floorplan/fabric/canva-controls";
 
 const FLOORPLAN_DATA_KEY = "floorplan";
 const FLOORPLAN_BACKGROUND_KEY = "floorplan-background";
@@ -470,7 +476,8 @@ export function createFabricObjectFromFloorplan(object: FloorplanObject): Fabric
 
     case "symbol": {
       const definition = getSymbolById(object.symbolId);
-      return createSymbolGroup(object, definition?.paths ?? ["M4 4 h40 v40 h-40 Z"], common);
+      const controls = STRETCHABLE_SYMBOL_IDS.has(object.symbolId) ? { controls: createStretchControls() } : {};
+      return createSymbolGroup(object, definition?.paths ?? ["M4 4 h40 v40 h-40 Z"], { ...common, ...controls });
     }
 
     case "icon": {
@@ -617,6 +624,45 @@ type PartialBase = {
   locked?: boolean;
   visible?: boolean;
 };
+
+/**
+ * A counter or wardrobe stretched on the canvas is drawn again at its new size, so its outline
+ * and letters stay true instead of being scaled. Returns the new canvas object, or null when
+ * there was nothing to redraw.
+ */
+export function isStretchedBox(target: FabricObject) {
+  const stored = getStoredFloorplanObject(target);
+  return (
+    stored?.type === "symbol" &&
+    STRETCHABLE_SYMBOL_IDS.has(stored.symbolId) &&
+    (Math.abs((target.scaleX ?? 1) - 1) > 1e-6 || Math.abs((target.scaleY ?? 1) - 1) > 1e-6)
+  );
+}
+
+export function redrawStretchedBox(canvas: Canvas, target: FabricObject) {
+  const stored = getStoredFloorplanObject(target);
+  const scaleX = target.scaleX ?? 1;
+  const scaleY = target.scaleY ?? 1;
+  if (stored?.type !== "symbol" || !isStretchedBox(target)) return null;
+
+  const next: FloorplanObject = {
+    ...stored,
+    x: target.left ?? 0,
+    y: target.top ?? 0,
+    rotation: target.angle ?? 0,
+    width: stored.width * scaleX,
+    height: stored.height * scaleY,
+    scaleX: 1,
+    scaleY: 1,
+  };
+  const redrawn = createFabricObjectFromFloorplan(next);
+  attachExtendedData(redrawn, next);
+  const index = canvas.getObjects().indexOf(target);
+  canvas.remove(target);
+  canvas.insertAt(index, redrawn);
+  canvas.setActiveObject(redrawn);
+  return redrawn;
+}
 
 /** The plan object a canvas object was drawn from, as last stored on it. */
 export function getStoredFloorplanObject(object: FabricObject) {

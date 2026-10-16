@@ -25,7 +25,9 @@ import {
   getFloorplanMeta,
   hasFloorplanBackground,
   isCanvasOperational,
+  isStretchedBox,
   moveAttachedObjects,
+  redrawStretchedBox,
   renderDocumentToCanvas,
   sortFloorplanObjectsByLayer,
   syncCanvasToDocument,
@@ -47,7 +49,11 @@ import { renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-libr
 import { publishFloorplanImage } from "@/lib/floorplan/publish-floorplan";
 import { imageDownloadBaseName } from "@/lib/image-naming";
 import { setHandleScale } from "@/lib/floorplan/fabric/canva-controls";
-import { snapFloorplanObjectPosition, snapToWallsAndCounters } from "@/lib/floorplan/fabric/object-snapping";
+import {
+  snapFloorplanObjectPosition,
+  snapStretchToWalls,
+  snapToWallsAndCounters,
+} from "@/lib/floorplan/fabric/object-snapping";
 import { formatMeters, lineLengthInMeters } from "@/lib/floorplan/measure";
 import { originalDocument } from "@/lib/floorplan/original-document";
 import { rotatePlanQuarterTurn } from "@/lib/floorplan/rotate-plan";
@@ -216,8 +222,23 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
       canvas.on("object:moving", (event) => {
         snapToWallsAndCounters(canvas, event.target);
       });
+      canvas.on("object:scaling", (event) => {
+        snapStretchToWalls(canvas, event.target, event.transform);
+      });
       canvas.on("object:modified", (event) => {
         if (canvas.isDrawingMode) {
+          return;
+        }
+        const target = event.target;
+        // Turned square, a fitting may now stand against a wall.
+        if (target && event.action === "rotate") snapToWallsAndCounters(canvas, target);
+        if (target && isStretchedBox(target)) {
+          // A stretched counter is redrawn at its new size once Fabric has finished the drag:
+          // replacing it inside this event would start the event again.
+          setTimeout(() => {
+            redrawStretchedBox(canvas, target);
+            syncFromCanvasRef.current();
+          });
           return;
         }
         moveAttachedObjects(canvas, event.target, event.action, event.transform?.original);
