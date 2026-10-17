@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:local": "set -a && . ./.env.docker.local && next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
@@ -11,26 +12,27 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@fontsource/jost": "^5.3.0",
     "@heroicons/react": "^2.2.0",
     "@supabase/supabase-js": "^2.104.0",
     "fabric": "^7.4.0",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.8.0",
-    "next": "16.2.4",
+    "next": "16.4.1",
     "openai": "^7.10.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "sharp": "^0.34.5"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.2.4",
+    "eslint-config-next": "16.4.1",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^3.2.7"
+    "vitest": "^5.0.4"
   }
 }

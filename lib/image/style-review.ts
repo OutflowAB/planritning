@@ -87,7 +87,8 @@ export async function reviewStyleAgainstReferences(
 
   try {
     const references = await loadStyleReferences();
-    const client = new OpenAI({ apiKey });
+    // A review is a quick vision call; a hung one must not eat the conversion's time.
+    const client = new OpenAI({ apiKey, timeout: 30_000, maxRetries: 1 });
 
     const content: Array<{ type: "input_text"; text: string } | { type: "input_image"; image_url: string; detail: "auto" }> = [
       { type: "input_text", text: REVIEW_INSTRUCTIONS },

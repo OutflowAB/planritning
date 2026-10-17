@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
-import { requireRole } from "@/lib/server-auth";
-import { getAdminSupabase, serverConfigMissingResponse } from "@/lib/supabase-server";
 
-const UPLOADS_TABLE = "uploaded_images";
-const REVIEWS_TABLE = "generation_reviews";
-const GENERATED_PREFIX = "generated/";
+import { loadApprovedPlan } from "@/lib/ownership";
+import { requireSession } from "@/lib/server-auth";
+import { GENERATED_PREFIX, getAdminSupabase, serverConfigMissingResponse, UPLOADS_TABLE } from "@/lib/supabase-server";
 
 type SaveBody = {
   imageId?: number;
@@ -12,7 +10,7 @@ type SaveBody = {
 };
 
 export async function POST(request: Request) {
-  const session = await requireRole();
+  const session = await requireSession();
   if (!session.ok) {
     return session.response;
   }
@@ -22,7 +20,12 @@ export async function POST(request: Request) {
     return serverConfigMissingResponse();
   }
 
-  const body = (await request.json()) as SaveBody;
+  let body: SaveBody;
+  try {
+    body = (await request.json()) as SaveBody;
+  } catch {
+    return NextResponse.json({ message: "Ogiltig förfrågan." }, { status: 400 });
+  }
   const imageId = typeof body.imageId === "number" ? body.imageId : Number.NaN;
   const filePath = body.filePath?.trim() ?? "";
 
@@ -30,30 +33,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Ogiltig bildreferens." }, { status: 400 });
   }
 
-  const { data: imageRow, error: imageError } = await adminSupabase
-    .from(UPLOADS_TABLE)
-    .select("id, file_path, saved_at")
-    .eq("id", imageId)
-    .eq("file_path", filePath)
-    .like("file_path", `${GENERATED_PREFIX}%`)
-    .maybeSingle();
-
-  if (imageError || !imageRow) {
-    return NextResponse.json({ message: "Den valda bilden hittades inte." }, { status: 404 });
+  const plan = await loadApprovedPlan(adminSupabase, session, { imageId, imagePath: filePath }, { forChange: true });
+  if (!plan.ok) {
+    return plan.response;
   }
-
-  const { data: reviewRow, error: reviewError } = await adminSupabase
-    .from(REVIEWS_TABLE)
-    .select("id")
-    .eq("image_id", imageRow.id)
-    .eq("decision", "approved")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (reviewError || !reviewRow) {
-    return NextResponse.json({ message: "Bilden är inte godkänd ännu." }, { status: 403 });
-  }
+  const imageRow = plan.row;
 
   if (imageRow.saved_at) {
     return NextResponse.json({

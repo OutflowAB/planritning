@@ -1,3 +1,5 @@
+import { BLANK_FLOORPLAN_PREFIX } from "@/lib/floorplan/image-url";
+
 export const PENDING_VERKTYG_SAVE_KEY = "pending-verktyg-save-v1";
 export const VERKTYG_SAVE_PENDING_EVENT = "verktyg-save-pending-changed";
 
@@ -72,6 +74,19 @@ export function buildVerktygHref(
 
 export function buildPlanritningarListHref(pathname: string) {
   return pathname.startsWith("/admin") ? "/admin/planritningar" : "/planritningar";
+}
+
+/**
+ * Where a plan is listed: finished or approved plans under Planritningar, unfinished scans
+ * under Skannare, conversions not yet approved under Konverterare.
+ */
+export function buildPlanHomeHref(
+  pathname: string,
+  plan: { imagePath: string; isPublished: boolean; isSaved: boolean },
+) {
+  if (pathname.startsWith("/admin") || plan.isPublished) return buildPlanritningarListHref(pathname);
+  if (plan.imagePath.startsWith(BLANK_FLOORPLAN_PREFIX)) return "/skannare";
+  return plan.isSaved ? buildPlanritningarListHref(pathname) : "/konverterare";
 }
 
 export function buildPlanritningarHref(

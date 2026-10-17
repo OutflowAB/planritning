@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 import { buildCompareBeforeImage } from "@/lib/floorplan/build-compare-before";
 import type { CompareSlotLayout } from "@/lib/image/brand-floorplan";
-import { requireRole } from "@/lib/server-auth";
+import { requireSession } from "@/lib/server-auth";
 
 const SLOT_KEYS = ["canvasWidth", "canvasHeight", "imageX", "imageY", "imageWidth", "imageHeight"] as const;
 
@@ -31,7 +31,7 @@ function parseSlot(value: FormDataEntryValue | null): CompareSlotLayout | undefi
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
-  const session = await requireRole();
+  const session = await requireSession();
   if (!session.ok) {
     return session.response;
   }

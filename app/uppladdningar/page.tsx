@@ -2,7 +2,7 @@
 
 import { Download, Loader2, Minus, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChangeEvent, DragEvent, TouchEvent, WheelEvent, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { ChangeEvent, DragEvent, TouchEvent, WheelEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { isAuthenticated } from "@/lib/auth";
 import {
@@ -10,20 +10,19 @@ import {
   resolveImageDownloadFileName,
 } from "@/lib/image-naming";
 import { ThumbnailImage } from "@/components/ui/thumbnail-image";
-import { apiFetch, apiJson, describeError } from "@/lib/api-client";
+import { uploadImages } from "@/lib/upload-images";
+import { dispatchLibraryUpdated } from "@/lib/app-events";
+import { apiFetch, apiJson } from "@/lib/api-client";
 import { imageUrl } from "@/lib/image-url";
 import { prefetchImage } from "@/lib/prefetch-image";
 import { dispatchGenerationUpdated, LIBRARY_UPDATED_EVENT, subscribeToAppEvent } from "@/lib/app-events";
 import { useCachedList } from "@/lib/use-cached-list";
 import type { ImageListItem } from "@/app/api/images/route";
-import {
-  hasUnfinishedConverterSession,
-  subscribeUnfinishedConverterSession,
-} from "@/lib/startsida-converter-session";
+import { converterHrefForUpload, useHasUnfinishedConverterSession } from "@/lib/converter-transfer";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast-provider";
 
 const UPLOADS_LIST_CACHE_KEY = "uploads-list-cache-v2";
-const CONVERTER_TRANSFER_KEY = "converter-selected-upload-v1";
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
@@ -38,6 +37,7 @@ type UploadedImageRow = {
   version: string | null;
   preview_url: string | null;
   full_url: string | null;
+  purged: boolean;
 };
 
 function withImageUrls(item: ImageListItem): UploadedImageRow {
@@ -50,8 +50,10 @@ function withImageUrls(item: ImageListItem): UploadedImageRow {
     mime_type: item.mime_type,
     created_at: item.created_at,
     version: item.version,
-    preview_url: isImage ? imageUrl(item.id, "thumb", item.version) : null,
-    full_url: isImage ? imageUrl(item.id, "full", item.version) : null,
+    // Originals are removed after 90 days; the row stays for the plans made from it.
+    purged: Boolean(item.purged_at),
+    preview_url: isImage && !item.purged_at ? imageUrl(item.id, "thumb", item.version) : null,
+    full_url: isImage && !item.purged_at ? imageUrl(item.id, "full", item.version) : null,
   };
 }
 
@@ -60,29 +62,18 @@ async function fetchUploads(signal: AbortSignal): Promise<UploadedImageRow[]> {
   return items.map(withImageUrls);
 }
 
-type ConverterTransferPayload = {
-  previewUrl: string;
-  fileName: string;
-  uploadId: number;
-};
-
-function useHasUnfinishedConverterSession() {
-  return useSyncExternalStore(
-    subscribeUnfinishedConverterSession,
-    () => hasUnfinishedConverterSession(),
-    () => false,
-  );
-}
-
 export default function UppladdningarPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { showToast } = useToast();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const isConverterSessionUnfinished = useHasUnfinishedConverterSession();
   const canDelete = isAuthenticated();
-  const converterPath = pathname.startsWith("/admin") ? "/admin/dashboard" : "/startsida";
+  // The converter is never mounted under /admin (see StartsidaConverterProvider).
+  const canConvert = !pathname.startsWith("/admin");
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const {
@@ -127,21 +118,7 @@ export default function UppladdningarPage() {
       return;
     }
 
-    if (upload.full_url) {
-      const payload: ConverterTransferPayload = {
-        previewUrl: upload.full_url,
-        fileName: resolveImageDownloadFileName(upload.id, {
-          mimeType: upload.mime_type,
-          filePath: upload.file_path,
-        }),
-        uploadId: upload.id,
-      };
-      window.sessionStorage.setItem(CONVERTER_TRANSFER_KEY, JSON.stringify(payload));
-    }
-
-    const params = new URLSearchParams();
-    params.set("fromUpload", String(upload.id));
-    router.push(`${converterPath}?${params.toString()}`);
+    router.push(converterHrefForUpload(upload));
   }
 
   function closeImagePreview() {
@@ -276,6 +253,15 @@ export default function UppladdningarPage() {
     if (!canDelete || isDeletingSelected || selectedUploadIds.length === 0) {
       return;
     }
+    const count = selectedUploadIds.length;
+    // Plans redrawn from these uploads are deleted with them.
+    if (
+      !(await confirm(
+        `Ta bort ${count === 1 ? "1 uppladdning" : `${count} uppladdningar`} och planritningar gjorda av dem? Det går inte att ångra.`,
+      ))
+    ) {
+      return;
+    }
 
     setIsDeletingSelected(true);
 
@@ -388,50 +374,51 @@ export default function UppladdningarPage() {
     });
   }, [uploads]);
 
-  async function uploadFile(file: File) {
-    if (isUploading) {
+  /** Uploads one or several images, three at a time; each succeeds or fails on its own. */
+  async function uploadFiles(files: File[]) {
+    if (isUploading || files.length === 0) {
       return;
     }
 
     setIsUploading(true);
+    setUploadProgress(files.length > 1 ? { done: 0, total: files.length } : null);
 
     try {
-      const payload = new FormData();
-      payload.append("file", file);
-      await apiFetch("/api/upload", { method: "POST", body: payload });
+      const outcomes = await uploadImages(files, (done, total) => setUploadProgress({ done, total }));
+      const uploaded = outcomes.filter((outcome) => outcome.ok).length;
+      const failed = outcomes.filter((outcome) => !outcome.ok);
 
-      showToast("Bilden laddades upp.");
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+      if (uploaded > 0) {
+        showToast(uploaded === 1 ? "Bilden laddades upp." : `${uploaded} bilder laddades upp.`);
+        reloadUploads();
+        dispatchLibraryUpdated();
       }
-      reloadUploads();
-    } catch (error) {
-      const message = describeError(error, "Ett oväntat fel uppstod under uppladdning.");
-      if (message) {
-        showToast(message, "error");
+      if (failed.length > 0) {
+        const first = failed[0];
+        showToast(
+          failed.length === 1 && "message" in first
+            ? `${first.file.name}: ${first.message}`
+            : `${failed.length} filer kunde inte laddas upp.`,
+          "error",
+        );
       }
     } finally {
       setIsUploading(false);
+      setUploadProgress(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
-  }
-
-  function assignUploadFile(file: File | null) {
-    if (!file || !file.type.startsWith("image/")) {
-      showToast("Välj en bildfil (PNG, JPG eller WEBP).", "error");
-      return;
-    }
-
-    void uploadFile(file);
   }
 
   function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
-    assignUploadFile(event.target.files?.[0] ?? null);
+    void uploadFiles(Array.from(event.target.files ?? []));
   }
 
   function handleDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
     setIsDragActive(false);
-    assignUploadFile(event.dataTransfer.files?.[0] ?? null);
+    void uploadFiles(Array.from(event.dataTransfer.files ?? []));
   }
 
   function handleDragOver(event: DragEvent<HTMLLabelElement>) {
@@ -462,17 +449,19 @@ export default function UppladdningarPage() {
             {isUploading ? (
               <>
                 <Loader2 className="h-8 w-8 animate-spin text-[#5c544a]" aria-hidden="true" />
-                <p className="mt-4 text-base font-medium text-[#6a6258]">Laddar upp...</p>
+                <p className="mt-4 text-base font-medium text-[#6a6258]">
+                  {uploadProgress ? `Laddar upp ${uploadProgress.done} av ${uploadProgress.total}...` : "Laddar upp..."}
+                </p>
               </>
             ) : (
               <>
                 <p className="text-base font-medium text-[#6a6258]">
-                  Dra och släpp din planritning här
+                  Dra och släpp dina planritningar här
                 </p>
                 <p className="mt-2 text-base text-[#6a6258]">
                   eller{" "}
                   <span className="font-semibold underline decoration-[#4d463f] underline-offset-4">
-                    bläddra bland filer
+                    bläddra bland filer (flera går bra)
                   </span>
                 </p>
               </>
@@ -482,7 +471,8 @@ export default function UppladdningarPage() {
             ref={fileInputRef}
             id="image-file"
             type="file"
-            accept="image/*"
+            multiple
+            accept="image/png,image/jpeg,image/webp"
             onChange={handleFileInputChange}
             disabled={isUploading}
             className="sr-only"
@@ -634,6 +624,9 @@ export default function UppladdningarPage() {
                         }
                       />
                     </button>
+                    {upload.purged ? (
+                      <p className="mt-2 text-center text-xs text-[#7b746a]">Originalet raderades efter 90 dagar.</p>
+                    ) : null}
                   </div>
                 </article>
                 );
@@ -737,34 +730,37 @@ export default function UppladdningarPage() {
               </div>
             </div>
 
-            <div className="flex items-center justify-end border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
-              <div className="group relative inline-flex">
-                {isConverterSessionUnfinished ? (
-                  <span
-                    id="converter-blocked-reason"
-                    role="tooltip"
-                    className="pointer-events-none absolute bottom-full right-0 z-10 mb-2 w-max max-w-xs rounded-none border border-[#d8d2c8] bg-[#3d3a36] px-3 py-2 text-xs font-medium leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+            {canConvert ? (
+              <div className="flex items-center justify-end border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+                <div className="group relative inline-flex">
+                  {isConverterSessionUnfinished ? (
+                    <span
+                      id="converter-blocked-reason"
+                      role="tooltip"
+                      className="pointer-events-none absolute bottom-full right-0 z-10 mb-2 w-max max-w-xs rounded-none border border-[#d8d2c8] bg-[#3d3a36] px-3 py-2 text-xs font-medium leading-snug text-white opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+                    >
+                      Slutför den påbörjade konverteringen först
+                    </span>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => goToConverter(previewImage)}
+                    disabled={isConverterSessionUnfinished}
+                    aria-label="Konvertera"
+                    aria-describedby={
+                      isConverterSessionUnfinished ? "converter-blocked-reason" : undefined
+                    }
+                    className="rounded-none border border-[#d8d2c8] bg-white px-4 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    Slutför den påbörjade konverteringen först
-                  </span>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => goToConverter(previewImage)}
-                  disabled={isConverterSessionUnfinished}
-                  aria-label="Konvertera"
-                  aria-describedby={
-                    isConverterSessionUnfinished ? "converter-blocked-reason" : undefined
-                  }
-                  className="rounded-none border border-[#d8d2c8] bg-white px-4 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Konvertera
-                </button>
+                    Konvertera
+                  </button>
+                </div>
               </div>
-            </div>
+            ) : null}
           </div>
         </div>
       ) : null}
+      {confirmDialog}
     </section>
   );
 }

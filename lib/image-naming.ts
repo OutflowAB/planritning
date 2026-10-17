@@ -6,6 +6,31 @@ export function imageDownloadBaseName(id: number): string {
   return `bild-${id}`;
 }
 
+type NamedPlan = { id: number; address?: string | null; floor_label?: string | null };
+
+/** "Storgatan 1 · ENTRÉPLAN" once the realtor has given an address, else "Bild 12". */
+export function planDisplayName(plan: NamedPlan): string {
+  const parts = [plan.address?.trim(), plan.floor_label?.trim()].filter(Boolean);
+  return parts.length > 0 ? parts.join(" · ") : imageDisplayName(plan.id);
+}
+
+/** A file name from the plan's address and floor ("storgatan-1-entreplan"), else "bild-12". */
+export function planDownloadBaseName(plan: NamedPlan): string {
+  const slug = [plan.address, plan.floor_label]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .replace(/å|ä/g, "a")
+    .replace(/ö/g, "o")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80)
+    .replace(/-+$/g, "");
+  return slug || imageDownloadBaseName(plan.id);
+}
+
 export function imageDownloadFileName(id: number, extension: string): string {
   const normalizedExtension = extension.replace(/^\./, "").toLowerCase() || "png";
   return `${imageDownloadBaseName(id)}.${normalizedExtension}`;

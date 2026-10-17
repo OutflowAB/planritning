@@ -6,9 +6,8 @@ import { TouchEvent, WheelEvent, useCallback, useEffect, useMemo, useRef, useSta
 
 import { apiJson, describeError } from "@/lib/api-client";
 import { imageUrl } from "@/lib/image-url";
-import { imageDisplayName } from "@/lib/image-naming";
+import { planDisplayName } from "@/lib/image-naming";
 
-const SEK_PER_GENERATION = 50;
 const MIN_PREVIEW_ZOOM = 0.5;
 const MAX_PREVIEW_ZOOM = 4;
 const PREVIEW_ZOOM_STEP = 0.5;
@@ -21,6 +20,7 @@ const periodLabels: Record<PeriodKey, string> = {
   current_month: "Månad",
 };
 const periodOptions: PeriodKey[] = ["today", "current_week", "current_month"];
+const billingPeriods: Record<PeriodKey, string> = { today: "day", current_week: "week", current_month: "month" };
 const monthLabelFormatter = new Intl.DateTimeFormat("sv-SE", {
   month: "long",
 });
@@ -46,17 +46,32 @@ function getIsoWeekNumber(date: Date) {
 
 type GenerationLogRow = {
   id: number;
-  file_name: string;
-  file_path: string;
+  image_id: number | null;
+  price_ore: number;
+  address: string | null;
+  floor_label: string | null;
   created_at: string;
-  version: string | null;
 };
+
+type BillingResponse = {
+  count: number;
+  totalSek: number;
+  priceSek: number;
+  items: GenerationLogRow[];
+  perUser?: { userId: string; displayName: string; count: number; totalSek: number }[];
+};
+
+const logName = (log: GenerationLogRow) =>
+  planDisplayName({ id: log.image_id ?? log.id, address: log.address, floor_label: log.floor_label });
 
 export default function FaktureringPage() {
   const [selectedPeriod, setSelectedPeriod] = useState<PeriodKey>("current_month");
   const [periodOffset, setPeriodOffset] = useState(0);
   const [isPeriodMenuOpen, setIsPeriodMenuOpen] = useState(false);
   const [generationCount, setGenerationCount] = useState(0);
+  const [totalCostSek, setTotalCostSek] = useState(0);
+  const [priceSek, setPriceSek] = useState<number | null>(null);
+  const [perUser, setPerUser] = useState<BillingResponse["perUser"]>(undefined);
   const [generationLogs, setGenerationLogs] = useState<GenerationLogRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -67,8 +82,6 @@ export default function FaktureringPage() {
   const periodMenuRef = useRef<HTMLDivElement | null>(null);
   const pinchStartDistanceRef = useRef<number | null>(null);
   const pinchStartZoomRef = useRef<number>(1);
-
-  const totalCostSek = generationCount * SEK_PER_GENERATION;
 
   const periodRange = useMemo(() => {
     const now = new Date();
@@ -137,16 +150,14 @@ export default function FaktureringPage() {
     setLoadError("");
     setIsLoading(true);
 
-    let logs: GenerationLogRow[];
+    let billing: BillingResponse;
     try {
+      // The server counts the period in Stockholm time; the labels here are only labels.
       const params = new URLSearchParams({
-        kind: "generated",
-        from: periodRange.start.toISOString(),
-        to: periodRange.end.toISOString(),
-        limit: "500",
+        period: billingPeriods[selectedPeriod],
+        offset: String(periodOffset),
       });
-      const { items } = await apiJson<{ items: GenerationLogRow[] }>(`/api/images?${params.toString()}`);
-      logs = items;
+      billing = await apiJson<BillingResponse>(`/api/billing?${params.toString()}`);
     } catch (error) {
       const message = describeError(error, "Kunde inte hämta statistik.");
       if (message) {
@@ -158,10 +169,13 @@ export default function FaktureringPage() {
       return;
     }
 
-    setGenerationLogs(logs);
-    setGenerationCount(logs.length);
+    setGenerationLogs(billing.items);
+    setGenerationCount(billing.count);
+    setTotalCostSek(billing.totalSek);
+    setPriceSek(billing.priceSek);
+    setPerUser(billing.perUser);
     setIsLoading(false);
-  }, [periodRange.end, periodRange.start]);
+  }, [periodOffset, selectedPeriod]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -204,7 +218,7 @@ export default function FaktureringPage() {
     setPreviewLog(log);
     setPreviewZoom(1);
     // The URL is known up front now; the image frame shows its own placeholder while it loads.
-    setPreviewUrl(imageUrl(log.id, "full", log.version));
+    setPreviewUrl(log.image_id ? imageUrl(log.image_id, "full", null) : null);
     setIsPreviewLoading(false);
   }
 
@@ -355,14 +369,14 @@ export default function FaktureringPage() {
             </div>
           </div>
           <p className="mt-2 text-sm text-[#6a6258]">
-            Översikt över genereringar och kostnad för vald period.
+            Färdiga planritningar och kostnad för vald period. Varje Slutför debiteras.
           </p>
         </div>
 
         <div className="mt-6 grid gap-4 md:grid-cols-2">
           <article className="rounded-none border border-[#d8d2c8] bg-[#f7f4ef] p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-[#7b746a]">
-              Antal genereringar
+              Färdiga planer
             </p>
             <p className="mt-3 text-3xl font-semibold text-[#3d3a36]">
               {isLoading ? "..." : generationCount}
@@ -380,7 +394,7 @@ export default function FaktureringPage() {
               {isLoading ? "..." : `${totalCostSek} kr`}
             </p>
             <p className="mt-2 text-xs text-[#7b746a]">
-              Baserat på {SEK_PER_GENERATION} kr per generering.
+              {priceSek === null ? "\u00a0" : `Baserat på ${priceSek} kr per färdig plan.`}
             </p>
           </article>
         </div>
@@ -389,6 +403,27 @@ export default function FaktureringPage() {
           <p className="mt-6 rounded-none border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {loadError}
           </p>
+        ) : null}
+
+        {perUser && perUser.length > 0 ? (
+          <table className="mt-6 w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-[#e8e2d8] text-xs uppercase tracking-wide text-[#7b746a]">
+                <th className="py-2">Mäklare</th>
+                <th className="text-right">Färdiga planer</th>
+                <th className="text-right">Kostnad</th>
+              </tr>
+            </thead>
+            <tbody>
+              {perUser.map((row) => (
+                <tr key={row.userId} className="border-b border-[#f0ece6]">
+                  <td className="py-2">{row.displayName}</td>
+                  <td className="text-right">{row.count}</td>
+                  <td className="text-right">{row.totalSek} kr</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         ) : null}
         </div>
 
@@ -400,7 +435,7 @@ export default function FaktureringPage() {
 
             {!isLoading && generationLogs.length === 0 ? (
               <p className="px-4 py-3 text-sm text-[#6a6258]">
-                Inga genereringar i vald period.
+                Inga färdiga planer i vald period.
               </p>
             ) : null}
 
@@ -410,15 +445,17 @@ export default function FaktureringPage() {
                   <button
                     key={log.id}
                     type="button"
-                    onClick={() => void openImagePreview(log)}
-                    className="flex w-full cursor-zoom-in items-center justify-between gap-3 px-4 py-3 text-left text-sm transition hover:bg-[#f2ede5]"
+                    onClick={() => log.image_id && openImagePreview(log)}
+                    disabled={!log.image_id}
+                    className="flex w-full cursor-zoom-in disabled:cursor-default items-center justify-between gap-3 px-4 py-3 text-left text-sm transition hover:bg-[#f2ede5]"
                   >
                     <div className="min-w-0">
-                      <p className="truncate font-medium text-[#3d3a36]">{imageDisplayName(log.id)}</p>
+                      <p className="truncate font-medium text-[#3d3a36]">{logName(log)}</p>
                     </div>
                     <div className="shrink-0 text-right">
                       <p className="text-xs text-[#7b746a]">
-                        {new Date(log.created_at).toLocaleString("sv-SE")}
+                        {new Date(log.created_at).toLocaleString("sv-SE", { timeZone: "Europe/Stockholm" })} ·{" "}
+                        {log.price_ore / 100} kr
                       </p>
                     </div>
                   </button>
@@ -440,7 +477,7 @@ export default function FaktureringPage() {
             onClick={(event) => event.stopPropagation()}
             role="dialog"
             aria-modal="true"
-            aria-label={`Förhandsvisning av ${imageDisplayName(previewLog.id)}`}
+            aria-label={`Förhandsvisning av ${logName(previewLog)}`}
           >
             <div className="flex items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
               <div className="flex min-w-0 items-center gap-2">
@@ -466,7 +503,7 @@ export default function FaktureringPage() {
                   <Plus size={15} aria-hidden="true" />
                 </button>
                 <span className="truncate text-xs font-semibold text-[#6a6258]">
-                  {imageDisplayName(previewLog.id)}
+                  {logName(previewLog)}
                 </span>
               </div>
 
@@ -499,7 +536,7 @@ export default function FaktureringPage() {
                     >
                       <ThumbnailImage
                         src={previewUrl}
-                        alt={imageDisplayName(previewLog.id)}
+                        alt={logName(previewLog)}
                         heightClassName="h-[50vh] sm:h-[calc(90vh-120px)]"
                         sizes="(max-width: 1024px) 95vw, 80vw"
                         priority

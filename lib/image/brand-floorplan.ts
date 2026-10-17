@@ -2,6 +2,7 @@ import path from "node:path";
 import sharp from "sharp";
 
 import { cropToMainContent, type CropBoundingBox } from "@/lib/image/smart-crop";
+import { SM_BEIGE_RGB } from "@/lib/sm-floorplan-layout";
 
 /**
  * How wide the drawing is worked at. This is what decides how many pixels each room label
@@ -44,7 +45,7 @@ export function resolveLayoutMetrics(drawingWidth: number): LayoutMetrics {
     frameInset: scaled(30),
   };
 }
-const BEIGE_BACKGROUND = { r: 225, g: 212, b: 200, alpha: 1 };
+const BEIGE_BACKGROUND = { ...SM_BEIGE_RGB, alpha: 1 };
 
 export type BrandedFloorplanLayout = {
   canvasWidth: number;

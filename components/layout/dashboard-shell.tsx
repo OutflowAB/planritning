@@ -8,7 +8,10 @@ import {
   Bars3Icon,
   BuildingOffice2Icon,
   CreditCardIcon,
+  SparklesIcon,
   Squares2X2Icon,
+  UsersIcon,
+  ViewfinderCircleIcon,
 } from "@heroicons/react/24/outline";
 import { usePathname, useRouter } from "next/navigation";
 import { ComponentType, ReactNode, SVGProps, useCallback, useEffect, useMemo, useState } from "react";
@@ -24,16 +27,19 @@ type DashboardShellProps = {
 
 type SidebarIcon = ComponentType<SVGProps<SVGSVGElement>>;
 
+// The order of the work: convert an upload or a scan, upload originals, then the finished plans.
 const defaultSidebarItems = [
-  { label: "Startsida", href: "/startsida", icon: Squares2X2Icon },
-  { label: "Planritningar", href: "/planritningar", icon: BuildingOffice2Icon },
+  { label: "Konverterare", href: "/konverterare", icon: SparklesIcon },
+  { label: "Skannare", href: "/skannare", icon: ViewfinderCircleIcon },
   { label: "Uppladdningar", href: "/uppladdningar", icon: ArrowUpTrayIcon },
+  { label: "Planritningar", href: "/planritningar", icon: BuildingOffice2Icon },
 ] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
 
 const adminSidebarItems = [
   { label: "Dashboard", href: "/admin/dashboard", icon: Squares2X2Icon },
-  { label: "Planritningar", href: "/admin/planritningar", icon: BuildingOffice2Icon },
   { label: "Uppladdningar", href: "/admin/uppladdningar", icon: ArrowUpTrayIcon },
+  { label: "Planritningar", href: "/admin/planritningar", icon: BuildingOffice2Icon },
+  { label: "Användare", href: "/admin/anvandare", icon: UsersIcon },
 ] as const satisfies ReadonlyArray<{ label: string; href: string; icon: SidebarIcon }>;
 
 const billingItem = {
@@ -48,8 +54,9 @@ const adminBillingItem = {
   icon: CreditCardIcon,
 } as const satisfies { label: string; href: string; icon: SidebarIcon };
 
-const IMAGE_GENERATION_COST_SEK = 50;
-const GENERATION_COUNT_CACHE_KEY = "generation-count-cache-v1";
+const GENERATION_COUNT_CACHE_KEY = "finished-plans-cache-v2";
+
+type MonthStats = { count: number; totalSek: number };
 
 /**
  * Each section has its own layout, so the shell remounts on every navigation. Starting the
@@ -57,7 +64,7 @@ const GENERATION_COUNT_CACHE_KEY = "generation-count-cache-v1";
  * time. Caching the last known count per month keeps the number stable across navigations
  * while it revalidates behind the scenes.
  */
-function readCachedGenerationCount(monthKey: string): number | null {
+function readCachedGenerationCount(monthKey: string): MonthStats | null {
   if (typeof window === "undefined") {
     return null;
   }
@@ -68,23 +75,23 @@ function readCachedGenerationCount(monthKey: string): number | null {
       return null;
     }
 
-    const parsed = JSON.parse(raw) as { monthKey?: string; count?: number };
-    return parsed.monthKey === monthKey && typeof parsed.count === "number"
-      ? parsed.count
+    const parsed = JSON.parse(raw) as { monthKey?: string; count?: number; totalSek?: number };
+    return parsed.monthKey === monthKey && typeof parsed.count === "number" && typeof parsed.totalSek === "number"
+      ? { count: parsed.count, totalSek: parsed.totalSek }
       : null;
   } catch {
     return null;
   }
 }
 
-function writeCachedGenerationCount(monthKey: string, count: number) {
+function writeCachedGenerationCount(monthKey: string, stats: MonthStats) {
   if (typeof window === "undefined") {
     return;
   }
 
   window.sessionStorage.setItem(
     GENERATION_COUNT_CACHE_KEY,
-    JSON.stringify({ monthKey, count }),
+    JSON.stringify({ monthKey, ...stats }),
   );
 }
 
@@ -97,7 +104,7 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
   const router = useRouter();
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [imageGenerationCount, setImageGenerationCount] = useState<number | null>(null);
+  const [monthStats, setMonthStats] = useState<MonthStats | null>(null);
   const currentMonthLabel = useMemo(
     () =>
       new Date().toLocaleDateString("sv-SE", {
@@ -107,31 +114,22 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
     [],
   );
 
-  const imageGenerationTotalCost = (imageGenerationCount ?? 0) * IMAGE_GENERATION_COST_SEK;
   const sidebarItems = variant === "admin" ? adminSidebarItems : defaultSidebarItems;
   const activeBillingItem = variant === "admin" ? adminBillingItem : billingItem;
   // Fakturering hör hemma i sidomenyn på desktop; på mobil ryms bara det man faktiskt
   // navigerar mellan, och tre poster får plats utan sidoscroll.
   const mobileNavItems = sidebarItems;
   const loadGenerationStats = useCallback(async () => {
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    const monthEnd = new Date(
-      now.getFullYear(),
-      now.getMonth() + 1,
-      1,
-    ).toISOString();
-
-    let count = 0;
+    let stats: MonthStats;
     try {
-      const params = new URLSearchParams({ kind: "generated", count: "1", from: monthStart, to: monthEnd });
-      ({ count } = await apiJson<{ count: number }>(`/api/images?${params.toString()}`));
+      // Finished plans this month in Stockholm time: the realtor's own, or the firm's.
+      stats = await apiJson<MonthStats>("/api/billing?period=month&summaryOnly=1");
     } catch {
       return;
     }
 
-    setImageGenerationCount(count ?? 0);
-    writeCachedGenerationCount(currentMonthKey(), count ?? 0);
+    setMonthStats({ count: stats.count, totalSek: stats.totalSek });
+    writeCachedGenerationCount(currentMonthKey(), { count: stats.count, totalSek: stats.totalSek });
   }, []);
 
   useEffect(() => {
@@ -140,7 +138,7 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
       // every navigation, then let the query overwrite it.
       const cached = readCachedGenerationCount(currentMonthKey());
       if (cached !== null) {
-        setImageGenerationCount((previous) => previous ?? cached);
+        setMonthStats((previous) => previous ?? cached);
       }
 
       void loadGenerationStats();
@@ -173,7 +171,7 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
     const exactMatchPaths =
       variant === "admin"
         ? ["/admin/dashboard"]
-        : ["/startsida"];
+        : ["/konverterare"];
 
     if (exactMatchPaths.includes(href)) {
       return pathname === href;
@@ -264,15 +262,15 @@ export function DashboardShell({ children, variant = "default" }: DashboardShell
                 Krediter ({currentMonthLabel})
               </h3>
               <p className="mt-3 text-sm text-white/80">
-                Bildgenereringar:{" "}
+                Färdiga planer:{" "}
                 <span className="font-semibold text-white/95">
-                  {imageGenerationCount ?? "–"}
+                  {monthStats?.count ?? "–"}
                 </span>
               </p>
               <p className="mt-1 text-sm text-white/80">
                 Kostnad:{" "}
                 <span className="font-semibold text-white/95">
-                  {imageGenerationTotalCost} kr
+                  {monthStats ? `${monthStats.totalSek} kr` : "–"}
                 </span>
               </p>
             </section>

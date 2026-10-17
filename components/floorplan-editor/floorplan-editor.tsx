@@ -2,11 +2,12 @@
 
 import dynamic from "next/dynamic";
 import { Loader2 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { EditorToolbar } from "@/components/floorplan-editor/editor-toolbar";
 import { EditorTopBar } from "@/components/floorplan-editor/editor-top-bar";
 import { useFloorplanEditor } from "@/components/floorplan-editor/hooks/use-floorplan-editor";
+import { apiFetch, describeError } from "@/lib/api-client";
 
 const EditorCanvas = dynamic(
   () => import("@/components/floorplan-editor/editor-canvas").then((module) => module.EditorCanvas),
@@ -22,6 +23,9 @@ type ApprovedImage = {
   file_path: string;
   preview_url: string;
   is_saved: boolean;
+  address?: string | null;
+  floor_label?: string | null;
+  can_edit?: boolean;
 };
 
 type FloorplanEditorProps = {
@@ -56,6 +60,41 @@ export function FloorplanEditor({
 }: FloorplanEditorProps) {
   const [errorMessage, setErrorMessage] = useState("");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  // The editor can mount with a placeholder while the plan loads; its address arrives later.
+  const metaFromPlan = { address: approvedImage.address ?? "", floorLabel: approvedImage.floor_label ?? "" };
+  const metaKey = `${approvedImage.id}|${metaFromPlan.address}|${metaFromPlan.floorLabel}`;
+  const [planMeta, setPlanMeta] = useState(metaFromPlan);
+  const [savedMeta, setSavedMeta] = useState(metaFromPlan);
+  const [loadedMetaKey, setLoadedMetaKey] = useState(metaKey);
+  if (loadedMetaKey !== metaKey) {
+    setLoadedMetaKey(metaKey);
+    setPlanMeta(metaFromPlan);
+    setSavedMeta(metaFromPlan);
+  }
+
+  /** Saves the address and floor if they changed. */
+  const savePlanMeta = useCallback(async () => {
+    if (savedMeta.address === planMeta.address && savedMeta.floorLabel === planMeta.floorLabel) {
+      return;
+    }
+    try {
+      await apiFetch("/api/floorplan-meta", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageId: approvedImage.id, ...planMeta }),
+      });
+      setSavedMeta(planMeta);
+    } catch (error) {
+      setErrorMessage(describeError(error, "Kunde inte spara adressen.") ?? "");
+    }
+  }, [approvedImage.id, planMeta, savedMeta]);
+
+  // Saved a moment after typing stops: clicking the drawing does not take focus from a field.
+  useEffect(() => {
+    const timer = window.setTimeout(() => void savePlanMeta(), 800);
+    return () => window.clearTimeout(timer);
+  }, [savePlanMeta]);
+
   const onError = useCallback((message: string) => {
     setErrorMessage(message);
   }, []);
@@ -74,7 +113,8 @@ export function FloorplanEditor({
         return;
       }
 
-      await controller.publishFlattenedImage();
+      await savePlanMeta();
+      await controller.publishFlattenedImage({ address: planMeta.address, floorLabel: planMeta.floorLabel });
       await onSaveToLibrary();
     } catch (error) {
       setErrorMessage(
@@ -84,6 +124,7 @@ export function FloorplanEditor({
   }
 
   async function handleLeave() {
+    await savePlanMeta();
     const saved = await controller.saveDocument();
     if (saved) {
       await onLeaveWithoutSaving();
@@ -110,7 +151,7 @@ export function FloorplanEditor({
     <section className="flex h-[calc(100vh-4rem)] max-h-[calc(100vh-4rem)] w-full flex-col overflow-hidden bg-[#f5f3f0]">
       <EditorTopBar
         controller={controller}
-        showPublish={!approvedImage.is_saved}
+        showPublish={approvedImage.can_edit !== false}
         isPublishing={isPublishing}
         isLeaving={isLeaving}
         isLoading={isEditorLoading}
@@ -139,7 +180,8 @@ export function FloorplanEditor({
             </div>
             <div className="px-4 py-4">
               <p id="reset-original-description" className="text-sm text-[#6a6258]">
-                Alla ändringar tas bort och planritningen återgår till originalbilden.
+                Alla ändringar tas bort och planritningen går tillbaka till hur den såg ut när den
+                skapades.
               </p>
             </div>
             <div className="flex justify-end gap-2 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
@@ -171,7 +213,14 @@ export function FloorplanEditor({
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col">
-        <EditorToolbar controller={controller} isLoading={isEditorLoading} />
+        <EditorToolbar
+          controller={controller}
+          isLoading={isEditorLoading}
+          planMeta={planMeta}
+          onPlanMetaChange={setPlanMeta}
+          onPlanMetaCommit={() => void savePlanMeta()}
+          canEditPlanMeta={approvedImage.can_edit !== false}
+        />
         <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {isEditorLoading ? (
             <EditorCanvasLoading />

@@ -1,11 +1,15 @@
 import { NextResponse } from "next/server";
-import { requireRole } from "@/lib/server-auth";
-import { getAdminSupabase, serverConfigMissingResponse } from "@/lib/supabase-server";
 
-const BUCKET_NAME = "planritningar";
-const UPLOADS_TABLE = "uploaded_images";
-const REVIEWS_TABLE = "generation_reviews";
-const GENERATED_PREFIX = "generated/";
+import { deleteUploadRecord } from "@/lib/delete-upload";
+import { loadOwnedImage } from "@/lib/ownership";
+import { requireSession } from "@/lib/server-auth";
+import {
+  GENERATED_PREFIX,
+  getAdminSupabase,
+  REVIEWS_TABLE,
+  serverConfigMissingResponse,
+  UPLOADS_TABLE,
+} from "@/lib/supabase-server";
 
 type ReviewBody = {
   action?: "approve" | "reject";
@@ -15,7 +19,7 @@ type ReviewBody = {
 };
 
 export async function POST(request: Request) {
-  const session = await requireRole();
+  const session = await requireSession();
   if (!session.ok) {
     return session.response;
   }
@@ -25,7 +29,12 @@ export async function POST(request: Request) {
     return serverConfigMissingResponse();
   }
 
-  const body = (await request.json()) as ReviewBody;
+  let body: ReviewBody;
+  try {
+    body = (await request.json()) as ReviewBody;
+  } catch {
+    return NextResponse.json({ message: "Ogiltig förfrågan." }, { status: 400 });
+  }
   const action = body.action;
   const imageId = typeof body.imageId === "number" ? body.imageId : Number.NaN;
   const filePath = body.filePath?.trim() ?? "";
@@ -46,52 +55,39 @@ export async function POST(request: Request) {
     );
   }
 
-  const { data: existingImage, error: lookupError } = await adminSupabase
-    .from(UPLOADS_TABLE)
-    .select("id, file_path")
-    .eq("id", imageId)
-    .eq("file_path", filePath)
-    .like("file_path", `${GENERATED_PREFIX}%`)
-    .single();
-
-  if (lookupError || !existingImage) {
-    return NextResponse.json({ message: "Bilden hittades inte." }, { status: 404 });
-  }
-
-  const { error: reviewError } = await adminSupabase.from(REVIEWS_TABLE).insert({
-    image_id: imageId,
-    file_path: filePath,
-    decision: action === "approve" ? "approved" : "rejected",
-    comment: action === "reject" ? comment : null,
+  const owned = await loadOwnedImage(adminSupabase, session, imageId, {
+    filePath,
+    prefix: GENERATED_PREFIX,
+    forChange: true,
   });
-
-  if (reviewError) {
-    console.error("Failed to store generation review", reviewError);
-    return NextResponse.json({ message: "Kunde inte spara granskningen." }, { status: 500 });
+  if (!owned.ok) {
+    return owned.response;
   }
 
   if (action === "approve") {
+    const { error: reviewError } = await adminSupabase.from(REVIEWS_TABLE).insert({
+      image_id: imageId,
+      file_path: filePath,
+      decision: "approved",
+      comment: null,
+    });
+    // An approved plan belongs in the library from now on, finished or not.
+    const { error: saveError } = await adminSupabase
+      .from(UPLOADS_TABLE)
+      .update({ saved_at: new Date().toISOString() })
+      .eq("id", imageId);
+    if (reviewError || saveError) {
+      console.error("Failed to store generation review", reviewError ?? saveError);
+      return NextResponse.json({ message: "Kunde inte spara granskningen." }, { status: 500 });
+    }
     return NextResponse.json({ success: true });
   }
 
-  const { data: deletedRows, error: deleteError } = await adminSupabase
-    .from(UPLOADS_TABLE)
-    .delete()
-    .eq("id", imageId)
-    .eq("file_path", filePath)
-    .select("id");
-
-  if (deleteError) {
-    return NextResponse.json({ message: "Kunde inte ta bort den genererade bilden." }, { status: 500 });
-  }
-
-  if (!deletedRows || deletedRows.length === 0) {
-    return NextResponse.json({ message: "Bilden hittades inte eller är redan borttagen." }, { status: 404 });
-  }
-
-  const { error: storageError } = await adminSupabase.storage.from(BUCKET_NAME).remove([filePath]);
-  if (storageError) {
-    console.error("Failed to remove rejected generated image from storage", storageError);
+  // A rejected generation is removed with its file and thumbnail; the comment goes with the
+  // next conversion request.
+  const result = await deleteUploadRecord(adminSupabase, session, imageId);
+  if (!result.ok) {
+    return NextResponse.json({ message: result.message }, { status: result.status });
   }
 
   return NextResponse.json({ success: true });

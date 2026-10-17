@@ -231,7 +231,9 @@ function createClient() {
     throw new Error("OPENAI_API_KEY saknas.");
   }
 
-  return new OpenAI({ apiKey });
+  // Two drawings (the first and one style retry) must fit inside the route's 300 s limit, so
+  // each gets 130 s and is not retried on its own.
+  return new OpenAI({ apiKey, timeout: 130_000, maxRetries: 0 });
 }
 
 function supportsInputFidelity(model: string) {

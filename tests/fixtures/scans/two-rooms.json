@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "walls": [
+    { "start": [0, 0], "end": [8, 0], "thickness": 0.25 },
+    { "start": [8, 0], "end": [8, 4], "thickness": 0.25 },
+    { "start": [8, 4], "end": [0, 4], "thickness": 0.25 },
+    { "start": [0, 4], "end": [0, 0], "thickness": 0.25 },
+    { "start": [4, 0], "end": [4, 4], "thickness": 0.1 }
+  ],
+  "doors": [
+    { "wall": 0, "offset": 5, "width": 1 },
+    { "wall": 4, "offset": 1.5, "width": 0.8 }
+  ],
+  "windows": [
+    { "wall": 2, "offset": 1, "width": 1.5 },
+    { "wall": 2, "offset": 5.5, "width": 1.5 },
+    { "wall": 3, "offset": 1.2, "width": 1.2 }
+  ],
+  "rooms": [
+    { "name": "Kök", "center": [2, 2], "outline": [[0, 0], [4, 0], [4, 4], [0, 4]] },
+    { "name": "Sovrum", "center": [6, 2], "outline": [[4, 0], [8, 0], [8, 4], [4, 4]] }
+  ],
+  "objects": [
+    { "category": "stove", "center": [0.6, 0.45], "width": 0.6, "depth": 0.6 },
+    { "category": "sink", "center": [1.4, 0.45], "width": 0.8, "depth": 0.6 },
+    { "category": "refrigerator", "center": [2.3, 0.45], "width": 0.6, "depth": 0.6 },
+    { "category": "bed", "center": [6.5, 2.5], "width": 1.6, "depth": 2 }
+  ]
+}

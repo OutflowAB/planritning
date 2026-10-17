@@ -66,7 +66,12 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
     let cancelled = false;
 
     if (!hasStoredSession) {
-      router.replace("/login");
+      // After a full page load the first client render still carries the server snapshot
+      // (`false`); the store re-renders with the real value right after. Only an empty store
+      // means signed out.
+      if (!isAuthenticated()) {
+        router.replace("/login");
+      }
       return;
     }
 
@@ -96,7 +101,7 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
 
     const currentRole = getStoredRole();
     if (currentRole !== requiredRole) {
-      router.replace(currentRole === "admin" ? "/admin/dashboard" : "/startsida");
+      router.replace(currentRole === "admin" ? "/admin/dashboard" : "/konverterare");
     }
   }, [isAllowed, requiredRole, router]);
 

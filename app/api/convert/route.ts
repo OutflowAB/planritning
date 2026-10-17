@@ -21,8 +21,12 @@ import {
 } from "@/lib/image/brand-floorplan";
 import { imageUrl } from "@/lib/image-url";
 import { createThumbnail, thumbnailPath } from "@/lib/image/thumbnail";
-import { requireRole } from "@/lib/server-auth";
-import { getAdminSupabase, normaliseEtag } from "@/lib/supabase-server";
+import { loadOwnedImage } from "@/lib/ownership";
+import { requireSession, type Session } from "@/lib/server-auth";
+import { AI_CAP_MESSAGE, aiMonthlyCap, isAiCapReached } from "@/lib/ai-cap";
+import { stockholmRange } from "@/lib/billing";
+import { validateImageUpload } from "@/lib/image/validate-upload";
+import { GENERATION_EVENTS_TABLE, getAdminSupabase, normaliseEtag } from "@/lib/supabase-server";
 
 const BUCKET_NAME = "planritningar";
 const UPLOADS_TABLE = "uploaded_images";
@@ -84,23 +88,26 @@ export const maxDuration = 300;
 
 async function resolveSourceUploadId(
   supabase: SupabaseClient,
+  owner: Session,
   uploadedFile: File,
-  inputBuffer: Buffer<ArrayBuffer>,
+  upload: { buffer: Buffer; mimeType: string; extension: string },
   sourceImageIdValue: FormDataEntryValue | null,
 ) {
+  const inputBuffer = upload.buffer;
   const sourceImageIdCandidate =
     typeof sourceImageIdValue === "string" && sourceImageIdValue.trim().length > 0
       ? Number(sourceImageIdValue)
       : Number.NaN;
 
   if (Number.isFinite(sourceImageIdCandidate)) {
-    const { data: existingSource, error: sourceLookupError } = await supabase
-      .from(UPLOADS_TABLE)
-      .select("id")
-      .eq("id", sourceImageIdCandidate)
-      .single();
+    // Only the user's own upload can be redrawn.
+    const existing = await loadOwnedImage(supabase, owner, sourceImageIdCandidate, {
+      prefix: UPLOADS_PREFIX,
+      forChange: true,
+    });
+    const existingSource = existing.ok ? existing.row : null;
 
-    if (sourceLookupError || !existingSource?.id) {
+    if (!existingSource || existingSource.purged_at) {
       return {
         sourceUploadId: null,
         sourceUploadError: "Källbilden kunde inte hittas. Välj bilden igen.",
@@ -113,17 +120,15 @@ async function resolveSourceUploadId(
     };
   }
 
-  const extension =
-    uploadedFile.name.split(".").pop()?.toLowerCase() ||
-    uploadedFile.type.split("/").pop()?.toLowerCase() ||
-    "jpg";
+  // Named and typed by what the bytes are, never by what the browser claimed.
+  const extension = upload.extension;
   const sourceStoragePath = `${UPLOADS_PREFIX}${Date.now()}-${crypto.randomUUID()}.${extension}`;
 
   const { error: sourceStorageError } = await supabase.storage
     .from(BUCKET_NAME)
     .upload(sourceStoragePath, inputBuffer, {
       upsert: false,
-      contentType: uploadedFile.type,
+      contentType: upload.mimeType,
     });
 
   if (sourceStorageError) {
@@ -139,7 +144,8 @@ async function resolveSourceUploadId(
       file_name: uploadedFile.name,
       file_path: sourceStoragePath,
       file_size: inputBuffer.byteLength,
-      mime_type: uploadedFile.type || null,
+      mime_type: upload.mimeType,
+      owner_id: owner.userId,
     })
     .select("id")
     .single();
@@ -189,7 +195,7 @@ async function toJpegDataUrl(buffer: Buffer) {
 class ConvertFailure extends Error {}
 
 export async function POST(request: Request) {
-  const session = await requireRole();
+  const session = await requireSession();
   if (!session.ok) {
     return session.response;
   }
@@ -207,12 +213,31 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Ingen bildfil skickades." }, { status: 400 });
   }
 
-  if (!uploadedFile.type.startsWith("image/")) {
-    return NextResponse.json({ message: "Filen måste vara en bild." }, { status: 400 });
+  const upload = await validateImageUpload(uploadedFile);
+  if (!upload.ok) {
+    return NextResponse.json({ message: upload.message }, { status: upload.status });
   }
-
-  const inputBuffer = Buffer.from(await uploadedFile.arrayBuffer());
+  const inputBuffer = upload.buffer;
   const requestedEngine = resolveImageEngine();
+
+  if (requestedEngine === "ai") {
+    // A firm-wide monthly cap protects the OpenAI budget from runaway use.
+    const capSupabase = getAdminSupabase();
+    if (!capSupabase) {
+      return NextResponse.json({ message: "Serverkonfiguration saknas." }, { status: 500 });
+    }
+    const { from } = stockholmRange("month");
+    const { count } = await capSupabase
+      .from(GENERATION_EVENTS_TABLE)
+      .select("id", { count: "exact", head: true })
+      .gte("created_at", from.toISOString());
+    if (isAiCapReached(count ?? 0, aiMonthlyCap())) {
+      return NextResponse.json({ message: AI_CAP_MESSAGE }, { status: 429 });
+    }
+    // shortcut: count-then-insert can let a few simultaneous requests past the cap; a database
+    // function would make it exact if the cap ever has to hold to the unit.
+    await capSupabase.from(GENERATION_EVENTS_TABLE).insert({ owner_id: session.userId, engine: "ai" });
+  }
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream<Uint8Array>({
@@ -243,7 +268,7 @@ export async function POST(request: Request) {
           throw new ConvertFailure("Kunde inte läsa bildens storlek.");
         }
 
-        let drawingBuffer = orientedColorBuffer;
+        let drawingBuffer: Buffer = orientedColorBuffer;
         let usedEngine: ConvertEngine = "algorithm";
         // The AI paints the beige itself, so the canvas is padded with the colour it actually
         // produced. Sampling it rather than hardcoding one avoids a visible seam where the
@@ -367,16 +392,14 @@ export async function POST(request: Request) {
             }
 
             console.error(
-              `AI generation failed, falling back to the algorithm ${JSON.stringify({
+              `AI generation failed ${JSON.stringify({
                 reason: error instanceof Error ? error.message : String(error),
                 sourceSize: `${sourceWidth}x${sourceHeight}`,
               })}`,
             );
-            send({
-              type: "status",
-              message: "Slutför konverteringen",
-              engine: "algorithm",
-            });
+            // A crude algorithmic drawing is not a plan a realtor can deliver, so it is not
+            // stored as one.
+            throw new ConvertFailure("Det gick inte att rita om planritningen just nu. Försök igen om en stund.");
           }
         }
 
@@ -404,8 +427,9 @@ export async function POST(request: Request) {
         }
         const { sourceUploadId, sourceUploadError } = await resolveSourceUploadId(
           supabase,
+          session,
           uploadedFile,
-          inputBuffer,
+          upload,
           sourceImageIdValue,
         );
 
@@ -436,6 +460,8 @@ export async function POST(request: Request) {
             file_size: branded.output.byteLength,
             mime_type: "image/png",
             source_upload_id: sourceUploadId,
+            owner_id: session.userId,
+            engine: usedEngine,
           })
           .select("id, file_path")
           .single();

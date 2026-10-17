@@ -52,7 +52,9 @@ import {
   setPendingSourceSelection,
 } from "@/lib/startsida-source-session";
 import { ApiError, apiFetch, apiJson } from "@/lib/api-client";
-import { dispatchGenerationUpdated } from "@/lib/app-events";
+import { prepareImageUpload } from "@/lib/prepare-upload";
+import { dispatchGenerationUpdated, dispatchLibraryUpdated } from "@/lib/app-events";
+import { uploadImages } from "@/lib/upload-images";
 import { imageUrl } from "@/lib/image-url";
 import type { ImageListItem } from "@/app/api/images/route";
 import {
@@ -538,6 +540,7 @@ export function FloorplanEnhancer() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [processingStatusMessage, setProcessingStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
   const [resultImageId, setResultImageId] = useState<number | null>(
     () => cachedReviewPreview.resultImageId,
   );
@@ -684,6 +687,7 @@ export function FloorplanEnhancer() {
         setHasRestoredPendingReview(true);
         return;
       }
+
 
       if (cachedReviewPreview.hasCompletePreviewCache) {
         void (async () => {
@@ -971,16 +975,56 @@ export function FloorplanEnhancer() {
     void persistLocalSourceSelection(file);
   }
 
+  /**
+   * Several plans dropped at once are uploaded (three at a time) and appear in the list of
+   * uploads below, to convert one by one; a single plan opens directly, as before.
+   */
+  async function uploadSeveral(files: File[]) {
+    setErrorMessage("");
+    setBatchMessage(`Laddar upp 0 av ${files.length} planritningar...`);
+    const outcomes = await uploadImages(files, (done, total) =>
+      setBatchMessage(`Laddar upp ${done} av ${total} planritningar...`),
+    );
+    setBatchMessage(null);
+
+    const uploaded = outcomes.filter((outcome) => outcome.ok).length;
+    if (uploaded > 0) {
+      dispatchLibraryUpdated();
+      showToast(
+        uploaded === 1
+          ? "1 planritning laddades upp. Välj den under uppladdningarna för att konvertera."
+          : `${uploaded} planritningar laddades upp. Välj en under uppladdningarna för att konvertera.`,
+      );
+    }
+    const failed = outcomes.filter((outcome) => !outcome.ok);
+    if (failed.length > 0) {
+      setErrorMessage(
+        failed.length === 1
+          ? `${failed[0].file.name}: ${"message" in failed[0] ? failed[0].message : "Kunde inte laddas upp."}`
+          : `${failed.length} filer kunde inte laddas upp.`,
+      );
+    }
+  }
+
+  function handleFiles(fileList: FileList | null) {
+    const files = Array.from(fileList ?? []);
+    if (files.length > 1) {
+      void uploadSeveral(files);
+      return;
+    }
+    assignFile(files[0] ?? null);
+  }
+
   function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0] ?? null;
-    assignFile(file);
+    handleFiles(event.target.files);
+    // Cleared so picking the same files again still fires a change.
+    event.target.value = "";
   }
 
   function handleDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
     setIsDragActive(false);
-    const file = event.dataTransfer.files?.[0] ?? null;
-    assignFile(file);
+    handleFiles(event.dataTransfer.files);
   }
 
   function handleDragOver(event: DragEvent<HTMLLabelElement>) {
@@ -1020,7 +1064,7 @@ export function FloorplanEnhancer() {
       }
 
       const payload = new FormData();
-      payload.append("file", resolvedFile);
+      payload.append("file", await prepareImageUpload(resolvedFile));
       if (sourceImageId) {
         payload.append("sourceImageId", String(sourceImageId));
       }
@@ -1386,6 +1430,7 @@ export function FloorplanEnhancer() {
       <input
         ref={fileInputRef}
         type="file"
+        multiple
         accept="image/png,image/jpeg,image/jpg,image/webp"
         className="sr-only"
         onChange={handleFileInputChange}
@@ -1417,9 +1462,11 @@ export function FloorplanEnhancer() {
               }`}
             >
               <p className="text-sm font-medium text-[#5c544a]">
-                Dra och släpp en planritning här, eller klicka för att välja fil.
+                {batchMessage ?? "Dra och släpp planritningar här, eller klicka för att välja filer."}
               </p>
-              <p className="mt-2 text-xs text-[#7b746a]">Stöd: PNG, JPG, WEBP</p>
+              <p className="mt-2 text-xs text-[#7b746a]">
+                Stöd: PNG, JPG, WEBP. Flera filer laddas upp åt gången.
+              </p>
             </label>
           ) : null}
 

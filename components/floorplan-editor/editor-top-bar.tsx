@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, Minus, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
+import { ArrowLeft, Check, Minus, Plus, Redo2, RotateCcw, RotateCw, Undo2 } from "lucide-react";
 
 import {
   FLOORPLAN_MAX_ZOOM,
@@ -77,6 +77,16 @@ export function EditorTopBar({
               Original
             </button>
           ) : null}
+          <button
+            type="button"
+            onClick={controller.rotatePlan}
+            disabled={!controller.canRotatePlan || isLoading}
+            title="Vrid planritningen ett kvarts varv medurs"
+            className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-2 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RotateCw size={14} aria-hidden="true" />
+            Rotera
+          </button>
         </div>
 
         <div aria-hidden="true" className="h-6 w-px shrink-0 bg-[#d8d2c8]" />

@@ -6,7 +6,8 @@ import { NextResponse } from "next/server";
  * function; several of them then reached for the anon key instead, which made the routes
  * subject to whatever the public key was allowed to do rather than to their own auth check.
  *
- * The service role bypasses row-level security, so nothing here may run before `requireRole`.
+ * The service role bypasses row-level security, so nothing here may run before `requireSession`,
+ * and every query on a user's data goes through `lib/ownership.ts`.
  */
 
 export const BUCKET_NAME = "planritningar";
@@ -14,10 +15,14 @@ export const UPLOADS_TABLE = "uploaded_images";
 export const REVIEWS_TABLE = "generation_reviews";
 export const DOCUMENTS_TABLE = "floor_plan_documents";
 export const GENERATION_EVENTS_TABLE = "generation_events";
+export const BILLING_EVENTS_TABLE = "billing_events";
 
 export const UPLOADS_PREFIX = "uploads/";
 export const GENERATED_PREFIX = "generated/";
+export { BLANK_FLOORPLAN_PREFIX } from "@/lib/floorplan/image-url";
 export const THUMBNAILS_PREFIX = "thumbs/";
+/** Finished plans, one file per plan, beside the untouched original. */
+export const PUBLISHED_PREFIX = "published/";
 
 let cachedClient: SupabaseClient | null = null;
 
@@ -51,10 +56,18 @@ export type UploadedImageRow = {
   created_at: string;
   saved_at: string | null;
   source_upload_id: number | null;
+  owner_id: string;
+  address: string | null;
+  floor_label: string | null;
+  published_path: string | null;
+  published_at: string | null;
+  purged_at: string | null;
+  engine: string | null;
 };
 
 export const UPLOADED_IMAGE_COLUMNS =
-  "id, file_name, file_path, file_size, mime_type, created_at, saved_at, source_upload_id";
+  "id, file_name, file_path, file_size, mime_type, created_at, saved_at, source_upload_id, " +
+  "owner_id, address, floor_label, published_path, published_at, purged_at, engine";
 
 /** Strips the surrounding quotes Supabase includes in a storage object's eTag. */
 export function normaliseEtag(etag: unknown): string | null {

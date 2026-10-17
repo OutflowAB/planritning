@@ -1,13 +1,20 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
-import { requireRole } from "@/lib/server-auth";
-import { getAdminSupabase, serverConfigMissingResponse } from "@/lib/supabase-server";
 
-const BUCKET_NAME = "planritningar";
-const UPLOADS_TABLE = "uploaded_images";
-const REVIEWS_TABLE = "generation_reviews";
-const DOCUMENTS_TABLE = "floor_plan_documents";
-const GENERATED_PREFIX = "generated/";
+import { planPriceOre } from "@/lib/billing";
+import { readJsonCapped } from "@/lib/http";
+import { loadApprovedPlan } from "@/lib/ownership";
+import { requireSession } from "@/lib/server-auth";
+import {
+  BILLING_EVENTS_TABLE,
+  BUCKET_NAME,
+  DOCUMENTS_TABLE,
+  getAdminSupabase,
+  PUBLISHED_PREFIX,
+  serverConfigMissingResponse,
+  UPLOADS_TABLE,
+} from "@/lib/supabase-server";
+
+const MAX_PUBLISH_BYTES = Math.floor(4.5 * 1024 * 1024);
 
 type PublishBody = {
   imageId?: number;
@@ -24,41 +31,13 @@ function parsePngDataUrl(dataUrl: string) {
   return Buffer.from(match[1], "base64");
 }
 
-async function assertApprovedGeneratedImage(
-  adminSupabase: SupabaseClient,
-  imageId: number,
-  filePath: string,
-) {
-  const { data: imageRow, error: imageError } = await adminSupabase
-    .from(UPLOADS_TABLE)
-    .select("id, file_path")
-    .eq("id", imageId)
-    .eq("file_path", filePath)
-    .like("file_path", `${GENERATED_PREFIX}%`)
-    .maybeSingle();
-
-  if (imageError || !imageRow) {
-    return { ok: false as const, status: 404, message: "Den valda bilden hittades inte." };
-  }
-
-  const { data: reviewRow, error: reviewError } = await adminSupabase
-    .from(REVIEWS_TABLE)
-    .select("id")
-    .eq("image_id", imageRow.id)
-    .eq("decision", "approved")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (reviewError || !reviewRow) {
-    return { ok: false as const, status: 403, message: "Bilden är inte godkänd ännu." };
-  }
-
-  return { ok: true as const };
-}
-
+/**
+ * "Slutför": stores the finished image beside the original, never over it, keeps the editable
+ * document (and a copy of it as finished, for downloads), and bills the plan. Every finish is
+ * billed, a re-finish too.
+ */
 export async function POST(request: Request) {
-  const session = await requireRole();
+  const session = await requireSession();
   if (!session.ok) {
     return session.response;
   }
@@ -68,58 +47,71 @@ export async function POST(request: Request) {
     return serverConfigMissingResponse();
   }
 
-  const body = (await request.json()) as PublishBody;
+  // The finished image arrives as base64; the host accepts at most 4.5 MB per request anyway.
+  const read = await readJsonCapped<PublishBody>(request, MAX_PUBLISH_BYTES);
+  if (!read.ok) {
+    return read.response;
+  }
+  const body = read.data;
   const imageId = typeof body.imageId === "number" ? body.imageId : Number.NaN;
   const filePath = body.imagePath?.trim() ?? "";
   const pngBuffer = body.pngDataUrl ? parsePngDataUrl(body.pngDataUrl) : null;
-
-  if (!Number.isFinite(imageId) || !filePath.startsWith(GENERATED_PREFIX)) {
-    return NextResponse.json({ message: "Ogiltig bildreferens." }, { status: 400 });
-  }
 
   if (!pngBuffer || pngBuffer.byteLength === 0) {
     return NextResponse.json({ message: "Ogiltig bilddata." }, { status: 400 });
   }
 
-  const access = await assertApprovedGeneratedImage(adminSupabase, imageId, filePath);
-  if (!access.ok) {
-    return NextResponse.json({ message: access.message }, { status: access.status });
+  const plan = await loadApprovedPlan(adminSupabase, session, { imageId, imagePath: filePath }, { forChange: true });
+  if (!plan.ok) {
+    return plan.response;
   }
 
-  const { error: uploadError } = await adminSupabase.storage.from(BUCKET_NAME).upload(filePath, pngBuffer, {
+  const publishedPath = `${PUBLISHED_PREFIX}${imageId}.png`;
+  const { error: uploadError } = await adminSupabase.storage.from(BUCKET_NAME).upload(publishedPath, pngBuffer, {
     upsert: true,
     contentType: "image/png",
   });
-
   if (uploadError) {
     console.error("Failed to publish floor plan image", uploadError);
     return NextResponse.json({ message: "Kunde inte spara den färdiga planritningen." }, { status: 500 });
   }
 
+  const publishedAt = new Date().toISOString();
   const { error: metadataError } = await adminSupabase
     .from(UPLOADS_TABLE)
-    .update({
-      file_size: pngBuffer.byteLength,
-      mime_type: "image/png",
-    })
-    .eq("id", imageId)
-    .eq("file_path", filePath);
-
+    .update({ published_path: publishedPath, published_at: publishedAt, saved_at: plan.row.saved_at ?? publishedAt })
+    .eq("id", imageId);
   if (metadataError) {
     console.error("Failed to update published image metadata", metadataError);
     return NextResponse.json({ message: "Kunde inte uppdatera bildmetadata." }, { status: 500 });
   }
 
-  const { error: documentDeleteError } = await adminSupabase
+  // Downloads are made from the plan as finished, so later edits are not delivered unbilled.
+  const { data: documentRow } = await adminSupabase
     .from(DOCUMENTS_TABLE)
-    .delete()
+    .select("document")
     .eq("image_id", imageId)
-    .eq("file_path", filePath);
-
-  if (documentDeleteError) {
-    console.error("Failed to clear floor plan document after publish", documentDeleteError);
-    return NextResponse.json({ message: "Kunde inte rensa redigeringsdata efter publicering." }, { status: 500 });
+    .eq("file_path", filePath)
+    .maybeSingle();
+  if (documentRow?.document) {
+    await adminSupabase
+      .from(DOCUMENTS_TABLE)
+      .update({ published_document: documentRow.document })
+      .eq("image_id", imageId)
+      .eq("file_path", filePath);
   }
 
-  return NextResponse.json({ success: true });
+  const { error: billingError } = await adminSupabase.from(BILLING_EVENTS_TABLE).insert({
+    owner_id: session.userId,
+    image_id: imageId,
+    price_ore: planPriceOre(),
+    address: plan.row.address,
+    floor_label: plan.row.floor_label,
+  });
+  if (billingError) {
+    console.error("Failed to record billing event", billingError);
+    return NextResponse.json({ message: "Kunde inte registrera den färdiga planen." }, { status: 500 });
+  }
+
+  return NextResponse.json({ success: true, publishedAt });
 }

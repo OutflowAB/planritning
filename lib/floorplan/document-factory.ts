@@ -5,7 +5,7 @@ import {
   type FloorplanDocument,
   type FloorplanObject,
 } from "@/lib/floorplan/types";
-import { SM_EDITOR, SM_INK, SM_ROOM_LABEL_FONT } from "@/lib/sm-floorplan-layout";
+import { roomLabelFontSize, SM_EDITOR, SM_ICON_STROKE, SM_INK, SM_ROOM_LABEL_FONT } from "@/lib/sm-floorplan-layout";
 
 type CreateDocumentInput = {
   imageId: number;
@@ -60,13 +60,18 @@ export function createDefaultWall(x: number, y: number): FloorplanObject {
   };
 }
 
-export function createDefaultRoomLabel(x: number, y: number, text = "Rum"): FloorplanObject {
+export function createDefaultRoomLabel(
+  x: number,
+  y: number,
+  canvasWidth: number,
+  text = "RUM",
+): FloorplanObject {
   return {
     id: createObjectId(),
     type: "roomLabel",
     ...createDefaultTransform(x, y),
     text,
-    fontSize: 18,
+    fontSize: roomLabelFontSize(canvasWidth),
     fontFamily: SM_ROOM_LABEL_FONT,
     fill: SM_INK,
     textAlign: "center",
@@ -86,37 +91,38 @@ export function createDefaultDimension(x: number, y: number): FloorplanObject {
   };
 }
 
-export function createDefaultDoor(x: number, y: number): FloorplanObject {
+/** `sizeScale` fits the default to the canvas; see defaultObjectScale. */
+export function createDefaultDoor(x: number, y: number, sizeScale = 1): FloorplanObject {
   return {
     id: createObjectId(),
     type: "door",
     ...createDefaultTransform(x, y),
-    width: 80,
+    width: 80 * sizeScale,
     swing: "right",
-    strokeWidth: SM_EDITOR.wallStroke,
+    strokeWidth: SM_ICON_STROKE,
   };
 }
 
-export function createDefaultWindow(x: number, y: number): FloorplanObject {
+export function createDefaultWindow(x: number, y: number, sizeScale = 1): FloorplanObject {
   return {
     id: createObjectId(),
     type: "window",
     ...createDefaultTransform(x, y),
-    width: 67,
-    height: 14,
+    width: 67 * sizeScale,
+    height: 14 * sizeScale,
     strokeWidth: SM_EDITOR.dimensionStroke,
   };
 }
 
-export function createDefaultStair(x: number, y: number): FloorplanObject {
+export function createDefaultStair(x: number, y: number, sizeScale = 1): FloorplanObject {
   return {
     id: createObjectId(),
     type: "stair",
     ...createDefaultTransform(x, y),
-    width: 80,
-    height: 120,
+    width: 80 * sizeScale,
+    height: 120 * sizeScale,
     direction: "up",
-    strokeWidth: SM_EDITOR.wallStroke,
+    strokeWidth: SM_ICON_STROKE,
   };
 }
 

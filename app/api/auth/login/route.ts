@@ -1,25 +1,32 @@
 import { NextResponse } from "next/server";
 
-import type { UserRole } from "@/lib/auth";
 import {
-  createSessionCookieValue,
-  credentialsMatch,
-  SESSION_COOKIE_NAME,
-  SESSION_TTL_SECONDS,
-  sessionCookieOptions,
+  clearSessionCookie,
+  isThrottled,
+  LOGIN_WINDOW_MINUTES,
+  PROFILE_COLUMNS,
+  PROFILES_TABLE,
+  type ProfileRow,
+  setSessionCookie,
+  verifyPassword,
 } from "@/lib/server-auth";
+import { getAdminSupabase, serverConfigMissingResponse } from "@/lib/supabase-server";
 
 type LoginBody = {
   email?: string;
   password?: string;
 };
 
-function clearedSession(response: NextResponse) {
-  response.cookies.set(SESSION_COOKIE_NAME, "", { ...sessionCookieOptions, maxAge: 0 });
-  return response;
+function clientIp(request: Request) {
+  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
 }
 
 export async function POST(request: Request) {
+  const supabase = getAdminSupabase();
+  if (!supabase) {
+    return serverConfigMissingResponse();
+  }
+
   let body: LoginBody;
   try {
     body = (await request.json()) as LoginBody;
@@ -27,43 +34,43 @@ export async function POST(request: Request) {
     return NextResponse.json({ message: "Ogiltig förfrågan." }, { status: 400 });
   }
 
-  const email = body.email?.trim() ?? "";
+  const email = body.email?.trim().toLowerCase() ?? "";
   const password = body.password ?? "";
+  const ip = clientIp(request);
+  if (!email || !password) {
+    return NextResponse.json({ message: "Fyll i e-post och lösenord." }, { status: 400 });
+  }
 
-  const userEmail = process.env.ADMIN_EMAIL;
-  const userPassword = process.env.ADMIN_PASSWORD;
-  const adminEmail = process.env.SUPERADMIN_EMAIL;
-  const adminPassword = process.env.SUPERADMIN_PASSWORD;
-
-  if (!userEmail || !userPassword) {
-    return clearedSession(
-      NextResponse.json({ message: "Serverkonfiguration saknas." }, { status: 500 }),
+  const since = new Date(Date.now() - LOGIN_WINDOW_MINUTES * 60_000).toISOString();
+  const [byEmail, byIp] = await Promise.all([
+    supabase.from("login_attempts").select("id", { count: "exact", head: true }).eq("email", email).gte("created_at", since),
+    supabase.from("login_attempts").select("id", { count: "exact", head: true }).eq("ip", ip).gte("created_at", since),
+  ]);
+  if (isThrottled({ email: byEmail.count ?? 0, ip: byIp.count ?? 0 })) {
+    return NextResponse.json(
+      { message: `För många misslyckade försök. Vänta ${LOGIN_WINDOW_MINUTES} minuter.` },
+      { status: 429 },
     );
   }
 
-  let role: UserRole | null = null;
+  const userId = await verifyPassword(email, password);
+  const { data: profile } = userId
+    ? await supabase.from(PROFILES_TABLE).select(PROFILE_COLUMNS).eq("id", userId).maybeSingle<ProfileRow>()
+    : { data: null };
 
-  if (
-    adminEmail &&
-    adminPassword &&
-    credentialsMatch(email, adminEmail) &&
-    credentialsMatch(password, adminPassword)
-  ) {
-    role = "admin";
-  } else if (credentialsMatch(email, userEmail) && credentialsMatch(password, userPassword)) {
-    role = "user";
-  }
-
-  if (!role) {
-    return clearedSession(
+  if (!profile || profile.disabled) {
+    await supabase.from("login_attempts").insert({ email, ip });
+    return clearSessionCookie(
       NextResponse.json({ message: "Fel e-post eller lösenord." }, { status: 401 }),
     );
   }
 
-  const response = NextResponse.json({ success: true, role });
-  response.cookies.set(SESSION_COOKIE_NAME, createSessionCookieValue(role), {
-    ...sessionCookieOptions,
-    maxAge: SESSION_TTL_SECONDS,
+  await supabase.from("login_attempts").delete().eq("email", email);
+  const response = NextResponse.json({
+    success: true,
+    role: profile.role,
+    mustChangePassword: profile.must_change_password,
+    displayName: profile.display_name,
   });
-  return response;
+  return setSessionCookie(response, profile.id, profile.session_version);
 }

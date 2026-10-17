@@ -8,6 +8,7 @@ import { FloorplanEditor } from "@/components/floorplan-editor/floorplan-editor"
 import {
   buildPlanritningarHref,
   buildVerktygHref,
+  buildPlanHomeHref,
   buildPlanritningarListHref,
   clearPendingVerktygSave,
   getPendingVerktygSave,
@@ -25,6 +26,7 @@ type ApprovedImageRow = {
   created_at: string;
   preview_url: string;
   is_saved: boolean;
+  is_published?: boolean;
 };
 
 /**
@@ -103,17 +105,7 @@ function VerktygEditor() {
           return;
         }
 
-        if (data.image.is_saved) {
-          clearPendingVerktygSave();
-          router.replace(
-            buildPlanritningarHref(pathname, {
-              imageId: data.image.id,
-              imagePath: data.image.file_path,
-            }),
-          );
-          return;
-        }
-
+        // Plans in the library open for editing too; finishing again republishes them.
         setPendingVerktygSave({
           imageId: data.image.id,
           imagePath: data.image.file_path,
@@ -182,7 +174,13 @@ function VerktygEditor() {
 
     try {
       clearPendingVerktygSave();
-      router.push(buildPlanritningarListHref(pathname));
+      router.push(
+        buildPlanHomeHref(pathname, {
+          imagePath: approvedImage.file_path,
+          isPublished: Boolean(approvedImage.is_published),
+          isSaved: approvedImage.is_saved,
+        }),
+      );
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "Kunde inte lämna redigeraren.");
       setIsLeaving(false);

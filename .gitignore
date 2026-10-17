@@ -40,3 +40,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Xcode workspace state for the iOS app package
+/ios/SMSkanner.swiftpm/.swiftpm/
+
+# Local test login for the iPhone app
+ios/local-test-login.txt

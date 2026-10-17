@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { apiJson, describeError, isAbortError } from "@/lib/api-client";
 
-const IMAGE_GENERATION_COST_SEK = 50;
 
 type StatCardProps = {
   label: string;
@@ -22,25 +21,27 @@ function StatCard({ label, value, helpText }: StatCardProps) {
   );
 }
 
-type Counts = { generated: number; uploads: number };
+type Counts = { generated: number; uploads: number; finished: number; totalSek: number; priceSek: number };
 
 async function fetchCounts(signal: AbortSignal): Promise<Counts> {
   // Independent counts, fetched together.
-  const [generated, uploads] = await Promise.all([
+  const [generated, uploads, billing] = await Promise.all([
     apiJson<{ count: number }>("/api/images?kind=generated&count=1", { signal }),
     apiJson<{ count: number }>("/api/images?kind=uploads&count=1", { signal }),
+    apiJson<{ count: number; totalSek: number; priceSek: number }>("/api/billing?period=month&summaryOnly=1", { signal }),
   ]);
-  return { generated: generated.count, uploads: uploads.count };
+  return {
+    generated: generated.count,
+    uploads: uploads.count,
+    finished: billing.count,
+    totalSek: billing.totalSek,
+    priceSek: billing.priceSek,
+  };
 }
 
 export default function AdminDashboardPage() {
   const [counts, setCounts] = useState<Counts | null>(null);
   const [loadError, setLoadError] = useState("");
-
-  const estimatedCost = useMemo(
-    () => (counts?.generated ?? 0) * IMAGE_GENERATION_COST_SEK,
-    [counts],
-  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -69,7 +70,7 @@ export default function AdminDashboardPage() {
         <div className="rounded-none border border-[#d8d2c8] bg-white p-4 text-[#3d3a36] shadow-sm sm:p-6 md:p-8">
           <h1 className="text-2xl font-semibold md:text-3xl">Dashboard</h1>
           <p className="mt-2 text-sm text-[#6a6258]">
-            Snabb översikt av uppladdningar, genereringar och estimerad kostnad.
+            Snabb översikt av uppladdningar, AI-genereringar och månadens fakturering.
           </p>
         </div>
 
@@ -81,19 +82,21 @@ export default function AdminDashboardPage() {
 
         <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
           <StatCard
-            label="Genererade bilder"
+            label="AI-genereringar"
             value={isLoading ? "–" : String(counts?.generated ?? 0)}
-            helpText="Antal bilder i mappen generated/."
+            helpText="Totalt antal omritade planritningar."
           />
           <StatCard
             label="Uppladdade original"
             value={isLoading ? "–" : String(counts?.uploads ?? 0)}
-            helpText="Antal bilder i mappen uploads/."
+            helpText="Totalt antal uppladdade original."
           />
           <StatCard
-            label="Estimerad kostnad"
-            value={isLoading ? "–" : `${estimatedCost} kr`}
-            helpText={`Beräknat med ${IMAGE_GENERATION_COST_SEK} kr per generering.`}
+            label="Fakturering denna månad"
+            value={isLoading ? "–" : `${counts?.totalSek ?? 0} kr`}
+            helpText={
+              counts ? `${counts.finished} färdiga planer à ${counts.priceSek} kr.` : "Färdiga planer denna månad."
+            }
           />
         </div>
       </div>

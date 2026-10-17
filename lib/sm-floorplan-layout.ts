@@ -1,9 +1,12 @@
 /** SkandiaMäklarna grafiska profil — delad mellan generering och redigerare. */
-export const SM_BEIGE = "#E1D4C8";
-export const SM_BEIGE_RGB = { r: 225, g: 212, b: 200 } as const;
-export const SM_INK = "#1A1A1A";
+/** The house colours from STILREGLER: beige paper, pure black ink. */
+export const SM_BEIGE = "#E1D5C9";
+export const SM_BEIGE_RGB = { r: 225, g: 213, b: 201 } as const;
+export const SM_INK = "#000000";
 export const SM_INK_MUTED = "#4D463F";
 export const SM_WALL_STROKE = 3;
+/** Line weight of every drawn fitting — symbols, doors, stairs — so they read as one family. */
+export const SM_ICON_STROKE = 2;
 export const SM_DIMENSION_STROKE = 1.5;
 export const SM_ASPECT_RATIO_WIDTH = 7;
 export const SM_ASPECT_RATIO_HEIGHT = 5;
@@ -13,8 +16,51 @@ export const SM_OUTER_FRAME_STROKE_PX = 3;
 export const SM_OUTER_FRAME_INSET_PX = 30;
 export const SM_LOGO_MAX_WIDTH_PX = 360;
 export const SM_LOGO_WIDTH_RATIO = 0.3;
-export const SM_ROOM_LABEL_FONT = "Arial, Helvetica, sans-serif";
+/**
+ * Room names in the reference plans: a semi-bold Futura-style geometric sans, about 1.5 % of
+ * the plan's width in size. Jost (OFL, `@fontsource/jost`) at 600 matches them in height,
+ * stroke weight and width with its own letter spacing — measured against 01-torpgatan-6.
+ */
+export const SM_ROOM_LABEL_FONT = "Jost, Arial, Helvetica, sans-serif";
+export const SM_ROOM_LABEL_WEIGHT = 600;
+const SM_ROOM_LABEL_SIZE_RATIO = 0.015;
+
+export function roomLabelFontSize(canvasWidth: number) {
+  return Math.max(12, Math.round(canvasWidth * SM_ROOM_LABEL_SIZE_RATIO));
+}
+
+/**
+ * The built-in sizes of hand-placed symbols, furniture, doors, windows and stairs were drawn for
+ * a ~1200 px wide plan. This scales them up to the canvas they are placed on.
+ */
+export function defaultObjectScale(canvasWidth: number) {
+  return Math.max(1, canvasWidth / 1200);
+}
 export const SM_DIMENSION_FONT = "Arial, Helvetica, sans-serif";
+
+/** The note every finished plan carries: the plans are drawn to look right, not to scale. */
+export const SM_NOT_TO_SCALE = "INTE SKALENLIG";
+
+/**
+ * Where the house text sits on a finished plan: "INTE SKALENLIG" bottom-left and the address
+ * with its floor bottom-right, both inside the outer frame. The frame is inset about 2 % of the
+ * canvas width on every plan the app makes (the brand layout scales with the drawing).
+ */
+export function houseTextLayout(canvasWidth: number, canvasHeight: number) {
+  const fontSize = Math.max(10, Math.round(canvasWidth * 0.009));
+  const frameInset = canvasWidth * 0.02;
+  const margin = fontSize * 1.2;
+  return {
+    fontSize,
+    left: frameInset + margin,
+    right: canvasWidth - frameInset - margin,
+    baseline: canvasHeight - frameInset - margin,
+  };
+}
+
+export function houseAddressLine(address?: string | null, floorLabel?: string | null) {
+  return [address?.trim().toUpperCase(), floorLabel?.trim().toUpperCase()].filter(Boolean).join(" · ");
+}
 
 export const SM_EDITOR = {
   background: SM_BEIGE,

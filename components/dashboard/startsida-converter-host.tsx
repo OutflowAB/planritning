@@ -14,6 +14,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { FloorplanEnhancer } from "@/components/dashboard/floorplan-enhancer";
+import { CONVERTER_PATH } from "@/lib/converter-transfer";
 import {
   consumeStartsidaConverterMountKey,
   hasPendingConverterTransfer,
@@ -39,7 +40,8 @@ function StartsidaConverterPortal({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const fromUploadParam = searchParams.get("fromUpload");
-  const isStartsida = pathname === "/startsida";
+  // The converter is shown on Konverterare and kept alive, hidden, everywhere else.
+  const isStartsida = pathname === CONVERTER_PATH;
   const [resetKey, setResetKey] = useState("persistent");
   const portalTarget = isStartsida && slot ? slot : fallbackEl;
 

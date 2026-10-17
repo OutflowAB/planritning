@@ -11,7 +11,7 @@ function getRedirectPathByRole(role: UserRole | null): string {
     return "/admin/dashboard";
   }
 
-  return "/startsida";
+  return "/konverterare";
 }
 
 export default function LoginPage() {
@@ -41,7 +41,11 @@ export default function LoginPage() {
         body: JSON.stringify({ email, password }),
       });
 
-      const data = (await response.json()) as { message?: string; role?: UserRole };
+      const data = (await response.json()) as {
+        message?: string;
+        role?: UserRole;
+        mustChangePassword?: boolean;
+      };
 
       if (!response.ok) {
         setError(data.message ?? "Inloggning misslyckades.");
@@ -51,7 +55,8 @@ export default function LoginPage() {
 
       const role = data.role === "admin" ? "admin" : "user";
       setAuthenticated(true, role);
-      router.replace(getRedirectPathByRole(role));
+      // A temporary password from the superadmin has to be replaced before anything else.
+      router.replace(data.mustChangePassword ? "/byt-losenord" : getRedirectPathByRole(role));
     } catch {
       setError("Ett oväntat fel uppstod. Försök igen.");
       setAuthenticated(false);
@@ -61,7 +66,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#5a5a5a] p-6">
+    <div className="relative flex min-h-screen items-center justify-center bg-[#5a5a5a] p-6">
       <div className="w-full max-w-md rounded-xl border border-white/35 bg-black/35 p-8 text-white shadow-2xl backdrop-blur-sm">
         <Image
           src="/sm-logo.svg"
@@ -125,6 +130,13 @@ export default function LoginPage() {
           </button>
         </form>
       </div>
+      <Image
+        src="/vattenmarke.svg"
+        alt="Outflow"
+        width={992}
+        height={1136}
+        className="pointer-events-none absolute bottom-4 right-4 h-12 w-auto opacity-80"
+      />
     </div>
   );
 }

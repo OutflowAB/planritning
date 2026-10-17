@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 
-import { getRequestRole } from "@/lib/server-auth";
+import { getSession } from "@/lib/server-auth";
 
 export async function GET() {
-  const role = await getRequestRole();
-  return NextResponse.json({ role });
+  const session = await getSession();
+  return NextResponse.json(
+    session
+      ? { role: session.role, mustChangePassword: session.mustChangePassword, displayName: session.displayName }
+      : { role: null },
+  );
 }

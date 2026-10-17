@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+// Room-name font for the floor plan canvas, under its plain name "Jost" (see sm-floorplan-layout).
+import "@fontsource/jost/600.css";
 import "./globals.css";
 
 import { Providers } from "./providers";

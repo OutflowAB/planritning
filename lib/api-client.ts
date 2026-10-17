@@ -37,12 +37,15 @@ function kindForStatus(status: number): ApiErrorKind {
   return "server";
 }
 
-async function readMessage(response: Response): Promise<string | null> {
+async function readBody(response: Response): Promise<{ message: string | null; code: string | null }> {
   try {
-    const data = (await response.clone().json()) as { message?: unknown };
-    return typeof data.message === "string" && data.message.length > 0 ? data.message : null;
+    const data = (await response.clone().json()) as { message?: unknown; code?: unknown };
+    return {
+      message: typeof data.message === "string" && data.message.length > 0 ? data.message : null,
+      code: typeof data.code === "string" ? data.code : null,
+    };
   } catch {
-    return null;
+    return { message: null, code: null };
   }
 }
 
@@ -80,10 +83,14 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
   }
 
   const kind = kindForStatus(response.status);
-  const message = (await readMessage(response)) ?? FALLBACK_MESSAGES[kind];
+  const body = await readBody(response);
+  const message = body.message ?? FALLBACK_MESSAGES[kind];
 
   if (kind === "unauthenticated") {
     redirectToLogin();
+  }
+  if (body.code === "password_change_required" && typeof window !== "undefined") {
+    window.location.assign("/byt-losenord");
   }
 
   throw new ApiError(kind, response.status, message);

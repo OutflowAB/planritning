@@ -1,14 +1,18 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 import { FLOORPLAN_DOCUMENT_VERSION, type FloorplanDocument } from "@/lib/floorplan/types";
-import { requireRole } from "@/lib/server-auth";
-import { getAdminSupabase, serverConfigMissingResponse } from "@/lib/supabase-server";
+import { readJsonCapped } from "@/lib/http";
+import { loadApprovedPlan } from "@/lib/ownership";
+import { requireSession } from "@/lib/server-auth";
+import {
+  DOCUMENTS_TABLE,
+  GENERATED_PREFIX,
+  getAdminSupabase,
+  serverConfigMissingResponse,
+} from "@/lib/supabase-server";
 
-const UPLOADS_TABLE = "uploaded_images";
-const REVIEWS_TABLE = "generation_reviews";
-const DOCUMENTS_TABLE = "floor_plan_documents";
-const GENERATED_PREFIX = "generated/";
+// A plan's document is a few hundred kilobytes at most; anything far beyond is not one.
+const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
 
 type SaveBody = {
   imageId?: number;
@@ -29,41 +33,8 @@ function isValidDocument(document: FloorplanDocument | undefined): document is F
   );
 }
 
-async function assertApprovedGeneratedImage(
-  adminSupabase: SupabaseClient,
-  imageId: number,
-  filePath: string,
-) {
-  const { data: imageRow, error: imageError } = await adminSupabase
-    .from(UPLOADS_TABLE)
-    .select("id, file_path")
-    .eq("id", imageId)
-    .eq("file_path", filePath)
-    .like("file_path", `${GENERATED_PREFIX}%`)
-    .maybeSingle();
-
-  if (imageError || !imageRow) {
-    return { ok: false as const, status: 404, message: "Den valda bilden hittades inte." };
-  }
-
-  const { data: reviewRow, error: reviewError } = await adminSupabase
-    .from(REVIEWS_TABLE)
-    .select("id")
-    .eq("image_id", imageRow.id)
-    .eq("decision", "approved")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (reviewError || !reviewRow) {
-    return { ok: false as const, status: 403, message: "Bilden är inte godkänd ännu." };
-  }
-
-  return { ok: true as const };
-}
-
 export async function GET(request: Request) {
-  const session = await requireRole();
+  const session = await requireSession();
   if (!session.ok) {
     return session.response;
   }
@@ -81,14 +52,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ message: "Ogiltig bildreferens." }, { status: 400 });
   }
 
-  const access = await assertApprovedGeneratedImage(adminSupabase, imageId, filePath);
+  const access = await loadApprovedPlan(adminSupabase, session, { imageId, imagePath: filePath });
   if (!access.ok) {
-    return NextResponse.json({ message: access.message }, { status: access.status });
+    return access.response;
   }
 
   const { data: row, error } = await adminSupabase
     .from(DOCUMENTS_TABLE)
-    .select("document, updated_at")
+    .select("document, source_document, published_document, updated_at")
     .eq("image_id", imageId)
     .eq("file_path", filePath)
     .maybeSingle();
@@ -104,12 +75,16 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     document: row.document as FloorplanDocument,
+    // The plan as first created (an imported scan), which "Original" returns to.
+    sourceDocument: (row.source_document as FloorplanDocument | null) ?? null,
+    // The plan as last finished, which downloads are made from.
+    publishedDocument: (row.published_document as FloorplanDocument | null) ?? null,
     updatedAt: row.updated_at,
   });
 }
 
 export async function PUT(request: Request) {
-  const session = await requireRole();
+  const session = await requireSession();
   if (!session.ok) {
     return session.response;
   }
@@ -119,7 +94,11 @@ export async function PUT(request: Request) {
     return serverConfigMissingResponse();
   }
 
-  const body = (await request.json()) as SaveBody;
+  const read = await readJsonCapped<SaveBody>(request, MAX_DOCUMENT_BYTES);
+  if (!read.ok) {
+    return read.response;
+  }
+  const body = read.data;
   const imageId = typeof body.imageId === "number" ? body.imageId : Number.NaN;
   const filePath = body.imagePath?.trim() ?? "";
 
@@ -131,9 +110,9 @@ export async function PUT(request: Request) {
     return NextResponse.json({ message: "Ogiltigt planritningsdokument." }, { status: 400 });
   }
 
-  const access = await assertApprovedGeneratedImage(adminSupabase, imageId, filePath);
+  const access = await loadApprovedPlan(adminSupabase, session, { imageId, imagePath: filePath }, { forChange: true });
   if (!access.ok) {
-    return NextResponse.json({ message: access.message }, { status: access.status });
+    return access.response;
   }
 
   const updatedAt = new Date().toISOString();
@@ -168,42 +147,4 @@ export async function PUT(request: Request) {
     success: true,
     updatedAt,
   });
-}
-
-export async function DELETE(request: Request) {
-  const session = await requireRole();
-  if (!session.ok) {
-    return session.response;
-  }
-
-  const adminSupabase = getAdminSupabase();
-  if (!adminSupabase) {
-    return serverConfigMissingResponse();
-  }
-
-  const { searchParams } = new URL(request.url);
-  const imageId = Number(searchParams.get("imageId"));
-  const filePath = searchParams.get("imagePath")?.trim() ?? "";
-
-  if (!Number.isFinite(imageId) || !filePath.startsWith(GENERATED_PREFIX)) {
-    return NextResponse.json({ message: "Ogiltig bildreferens." }, { status: 400 });
-  }
-
-  const access = await assertApprovedGeneratedImage(adminSupabase, imageId, filePath);
-  if (!access.ok) {
-    return NextResponse.json({ message: access.message }, { status: access.status });
-  }
-
-  const { error } = await adminSupabase
-    .from(DOCUMENTS_TABLE)
-    .delete()
-    .eq("image_id", imageId)
-    .eq("file_path", filePath);
-
-  if (error) {
-    console.error("Failed to delete floor plan document", error);
-    return NextResponse.json({ message: "Kunde inte ta bort planritningsdata." }, { status: 500 });
-  }
-
-  return NextResponse.json({ success: true });
 }

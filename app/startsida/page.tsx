@@ -1,10 +1,6 @@
-import { StartsidaConverterSlot } from "@/components/dashboard/startsida-converter-host";
-import { SectionPage } from "@/components/dashboard/section-page";
+import { redirect } from "next/navigation";
 
+/** The old start page; the converter now lives under Konverterare. */
 export default function StartsidaPage() {
-  return (
-    <SectionPage title="Startsida">
-      <StartsidaConverterSlot />
-    </SectionPage>
-  );
+  redirect("/konverterare");
 }

@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { imageDownloadFileName, imageExtensionFromMimeType } from "@/lib/image-naming";
-import { assertDecodableImage, createThumbnail, thumbnailPath } from "@/lib/image/thumbnail";
-import { requireRole } from "@/lib/server-auth";
+import { imageDownloadFileName } from "@/lib/image-naming";
+import { createThumbnail, thumbnailPath } from "@/lib/image/thumbnail";
+import { validateImageUpload } from "@/lib/image/validate-upload";
+import { requireSession } from "@/lib/server-auth";
 import {
   BUCKET_NAME,
   getAdminSupabase,
@@ -16,9 +17,6 @@ import {
 
 export const runtime = "nodejs";
 
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const ACCEPTED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"]);
-
 /**
  * POST /api/upload — multipart with a `file` field.
  *
@@ -27,7 +25,7 @@ const ACCEPTED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "im
  * before it is accepted, and the thumbnail is made once, now, rather than on first view.
  */
 export async function POST(request: Request) {
-  const session = await requireRole();
+  const session = await requireSession();
   if (!session.ok) {
     return session.response;
   }
@@ -43,30 +41,17 @@ export async function POST(request: Request) {
   if (!(file instanceof File)) {
     return NextResponse.json({ message: "Ingen fil skickades." }, { status: 400 });
   }
-  if (!ACCEPTED_MIME_TYPES.has(file.type)) {
-    return NextResponse.json(
-      { message: "Filen måste vara en bild i PNG, JPEG eller WebP." },
-      { status: 415 },
-    );
+  const upload = await validateImageUpload(file);
+  if (!upload.ok) {
+    return NextResponse.json({ message: upload.message }, { status: upload.status });
   }
-  if (file.size > MAX_UPLOAD_BYTES) {
-    return NextResponse.json({ message: "Filen får vara högst 25 MB." }, { status: 413 });
-  }
-
-  const buffer = Buffer.from(await file.arrayBuffer());
-  try {
-    await assertDecodableImage(buffer);
-  } catch {
-    return NextResponse.json({ message: "Filen gick inte att läsa som bild." }, { status: 415 });
-  }
-
-  const extension = imageExtensionFromMimeType(file.type) ?? "jpg";
+  const { buffer, extension, mimeType } = upload;
   const storagePath = `${UPLOADS_PREFIX}${Date.now()}-${crypto.randomUUID()}.${extension}`;
   const bucket = supabase.storage.from(BUCKET_NAME);
 
   const { error: uploadError } = await bucket.upload(storagePath, buffer, {
     upsert: false,
-    contentType: file.type,
+    contentType: mimeType,
   });
   if (uploadError) {
     console.error("Failed to store upload", uploadError);
@@ -79,7 +64,8 @@ export async function POST(request: Request) {
       file_name: file.name,
       file_path: storagePath,
       file_size: buffer.byteLength,
-      mime_type: file.type,
+      mime_type: mimeType,
+      owner_id: session.userId,
     })
     .select("id")
     .single();
@@ -123,5 +109,5 @@ export async function POST(request: Request) {
     console.error("Thumbnail generation failed after upload", error);
   }
 
-  return NextResponse.json({ item: { ...(row as UploadedImageRow), version } });
+  return NextResponse.json({ item: { ...(row as unknown as UploadedImageRow), version } });
 }

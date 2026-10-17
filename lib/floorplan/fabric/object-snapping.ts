@@ -1,8 +1,11 @@
 import { AligningGuidelines } from "fabric/extensions";
-import type { Canvas, FabricObject } from "fabric";
+import { Line, type Canvas, type FabricObject, type Transform } from "fabric";
 
 import type { FloorplanObject } from "@/lib/floorplan/types";
-import { getFloorplanMeta } from "@/lib/floorplan/fabric/sync";
+import { canvasPixels } from "@/lib/floorplan/fabric/canva-controls";
+import { getFloorplanMeta, getStoredFloorplanObject } from "@/lib/floorplan/fabric/sync";
+import { high, low, snapBoxToFixtures, snapStretchedSide, type SnapBox } from "@/lib/floorplan/snap-box";
+import { getSymbolById, STRETCHABLE_SYMBOL_IDS } from "@/lib/floorplan/symbol-library";
 
 const FLOORPLAN_BACKGROUND_KEY = "floorplan-background";
 export const FLOORPLAN_SNAP_MARGIN = 8;
@@ -151,4 +154,92 @@ export function installObjectSnapping(canvas: Canvas) {
       return getSnapReferenceObjects(canvas, target);
     },
   });
+}
+
+const COUNTER_ID = "bankskiva";
+const FIXTURE_SNAP_SCREEN_PIXELS = 12;
+
+function isSquareToCanvas(object: FabricObject) {
+  const angle = (((object.angle ?? 0) % 90) + 90) % 90;
+  return angle < 0.5 || angle > 89.5;
+}
+
+function boxOf(object: FabricObject): SnapBox {
+  object.setCoords();
+  const { left, top, width, height } = object.getBoundingRect();
+  return { left, top, right: left + width, bottom: top + height };
+}
+
+/** The walls running straight across or down the plan, whose line has no height or no width. */
+function straightWalls(canvas: Canvas) {
+  const walls: SnapBox[] = [];
+  canvas.forEachObject((object) => {
+    const stored = getStoredFloorplanObject(object);
+    if (stored?.type === "wall" && object.visible && object instanceof Line && isSquareToCanvas(object) && Math.min(object.width, object.height) < 0.5) {
+      walls.push(boxOf(object));
+    }
+  });
+  return walls;
+}
+
+/**
+ * While a counter or wardrobe is stretched by a side handle: the side being pulled stops at the
+ * face of a wall it comes close to.
+ */
+export function snapStretchToWalls(canvas: Canvas, target: FabricObject, transform: Transform) {
+  const stored = getStoredFloorplanObject(target);
+  const side = transform.corner;
+  if (stored?.type !== "symbol" || !STRETCHABLE_SYMBOL_IDS.has(stored.symbolId) || !isSquareToCanvas(target)) return;
+  if (!["ml", "mr", "mt", "mb"].includes(side)) return;
+
+  // The box's own width runs down the plan when it is turned a quarter.
+  const ownWidth = side === "ml" || side === "mr";
+  const turned = Math.abs(Math.round((target.angle ?? 0) / 90)) % 2 === 1;
+  const axis = ownWidth !== turned ? 0 : 1;
+  const { originX, originY } = transform;
+  const anchor = target.translateToOriginPoint(target.getCenterPoint(), originX, originY);
+  const box = boxOf(target);
+  const fixedAt = axis === 0 ? anchor.x : anchor.y;
+  const movingHigh = Math.abs(fixedAt - low(box, axis)) < Math.abs(fixedAt - high(box, axis));
+
+  const move = snapStretchedSide(box, axis, movingHigh, straightWalls(canvas), canvasPixels(FIXTURE_SNAP_SCREEN_PIXELS));
+  if (!move) return;
+  const extent = high(box, axis) - low(box, axis);
+  const factor = (extent + (movingHigh ? move : -move)) / extent;
+  if (ownWidth) target.set({ scaleX: (target.scaleX ?? 1) * factor });
+  else target.set({ scaleY: (target.scaleY ?? 1) * factor });
+  target.setPositionByOrigin(anchor, originX, originY);
+  target.setCoords();
+}
+
+/**
+ * While a fitting or piece of furniture is dragged: rests it against walls, and puts kitchen
+ * appliances in line on the counter under them. Only for things square to the plan, against
+ * walls that are too; anything at an angle moves freely.
+ */
+export function snapToWallsAndCounters(canvas: Canvas, target: FabricObject) {
+  const stored = getStoredFloorplanObject(target);
+  if (!stored || !["symbol", "furniture", "icon", "stair"].includes(stored.type) || !isSquareToCanvas(target)) {
+    return;
+  }
+  const isAppliance =
+    stored.type === "symbol" && stored.symbolId !== COUNTER_ID && getSymbolById(stored.symbolId)?.category === "kök";
+
+  const walls = straightWalls(canvas);
+  const counters: SnapBox[] = [];
+  if (isAppliance) {
+    canvas.forEachObject((object) => {
+      const other = getStoredFloorplanObject(object);
+      if (object !== target && object.visible && isSquareToCanvas(object) && other?.type === "symbol" && other.symbolId === COUNTER_ID) {
+        counters.push(boxOf(object));
+      }
+    });
+  }
+
+  // How close, on screen, a box must come to a wall or a counter's edge to snap to it.
+  const { dx, dy } = snapBoxToFixtures(boxOf(target), walls, counters, canvasPixels(FIXTURE_SNAP_SCREEN_PIXELS));
+  if (dx || dy) {
+    target.set({ left: (target.left ?? 0) + dx, top: (target.top ?? 0) + dy });
+    target.setCoords();
+  }
 }

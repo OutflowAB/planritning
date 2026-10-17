@@ -13,8 +13,11 @@ import {
 } from "fabric";
 
 import {
+  abbreviationFontSize,
   getFurnitureById,
   getSymbolById,
+  abbreviationTextSize,
+  STRETCHABLE_SYMBOL_IDS,
 } from "@/lib/floorplan/symbol-library";
 import type {
   EraserStrokeObject,
@@ -24,8 +27,19 @@ import type {
   FurnitureObject,
   SymbolObject,
 } from "@/lib/floorplan/types";
-import { SM_EDITOR, SM_INK } from "@/lib/sm-floorplan-layout";
-import { CANVA_PURPLE, CANVA_SELECTION_PROPS } from "@/lib/floorplan/fabric/canva-controls";
+import {
+  SM_EDITOR,
+  SM_ICON_STROKE,
+  SM_INK,
+  SM_ROOM_LABEL_FONT,
+  SM_ROOM_LABEL_WEIGHT,
+} from "@/lib/sm-floorplan-layout";
+import {
+  CANVA_PURPLE,
+  CANVA_SELECTION_PROPS,
+  createStretchControls,
+  createWallControls,
+} from "@/lib/floorplan/fabric/canva-controls";
 
 const FLOORPLAN_DATA_KEY = "floorplan";
 const FLOORPLAN_BACKGROUND_KEY = "floorplan-background";
@@ -235,15 +249,15 @@ function createPathGroup(
   stroke: string,
   fill: string,
 ): Group {
-  const scaleX = width / 48;
-  const scaleY = height / 48;
   const items = paths.map(
     (pathData) =>
       new Path(pathData, {
         fill,
         stroke,
-        strokeWidth: 2,
+        strokeWidth: SM_ICON_STROKE,
         strokeUniform: true,
+        strokeLineCap: "round",
+        strokeLineJoin: "round",
         originX: "left",
         originY: "top",
       }),
@@ -253,8 +267,42 @@ function createPathGroup(
     originX: "left",
     originY: "top",
   });
-  group.scaleX = scaleX;
-  group.scaleY = scaleY;
+  // The drawing, not its design box, fills the object's size, so a 0.6 m stove is 0.6 m wide.
+  group.scaleX = width / Math.max(group.width, 1);
+  group.scaleY = height / Math.max(group.height, 1);
+  return group;
+}
+
+/**
+ * Symbols and furniture: the scaled drawing (and an appliance's abbreviation) inside an outer
+ * group. The outer group carries the object's own position and transform, so resizing it on
+ * the canvas round-trips like any other object instead of being overwritten by the drawing's
+ * scale.
+ */
+function createSymbolGroup(
+  object: SymbolObject | FurnitureObject,
+  definition: { paths: string[]; text?: string },
+  common: Partial<FabricObject>,
+) {
+  const drawing = createPathGroup(definition.paths, object.width, object.height, object.stroke, object.fill);
+  const children: FabricObject[] = [drawing];
+  if (definition.text) {
+    children.push(
+      new FabricText(definition.text, {
+        left: (drawing.left ?? 0) + object.width / 2,
+        top: (drawing.top ?? 0) + object.height / 2,
+        originX: "center",
+        originY: "center",
+        fontFamily: SM_ROOM_LABEL_FONT,
+        fontWeight: SM_ROOM_LABEL_WEIGHT,
+        fontSize: object.type === "symbol" ? abbreviationTextSize(object) : abbreviationFontSize(object.width, object.height, definition.text),
+        fill: object.stroke,
+      }),
+    );
+  }
+  const group = new Group(children, common);
+  setFloorplanMeta(group, { floorplanId: object.id, floorplanType: object.type });
+  keepLettersUpright(group);
   return group;
 }
 
@@ -282,9 +330,14 @@ export function createFabricObjectFromFloorplan(object: FloorplanObject): Fabric
     case "wall":
       return new Line([object.x, object.y, object.x2, object.y2], {
         ...common,
+        // A line is placed by its bounding box, which starts at its smallest x and y — not at its
+        // first point, which is only the same thing for a line drawn down and to the right.
+        left: Math.min(object.x, object.x2),
+        top: Math.min(object.y, object.y2),
         stroke: SM_INK,
         strokeWidth: object.strokeWidth,
         strokeLineCap: "square",
+        controls: createWallControls(),
       });
 
     case "roomLabel":
@@ -292,6 +345,8 @@ export function createFabricObjectFromFloorplan(object: FloorplanObject): Fabric
         ...common,
         fontFamily: object.fontFamily,
         fontSize: object.fontSize,
+        // The weight is the house style, not per label.
+        fontWeight: SM_ROOM_LABEL_WEIGHT,
         fill: object.fill,
         textAlign: object.textAlign,
       });
@@ -325,20 +380,18 @@ export function createFabricObjectFromFloorplan(object: FloorplanObject): Fabric
     }
 
     case "door": {
+      // The leaf standing open and the arc of its swing — nothing across the opening, as the
+      // reference plans draw doors.
       const arc = new Path(`M 0 0 L 0 ${-object.width} A ${object.width} ${object.width} 0 0 ${object.swing === "right" ? 1 : 0} ${object.swing === "right" ? object.width : -object.width} 0`, {
         fill: "transparent",
         stroke: SM_INK,
         strokeWidth: object.strokeWidth,
+        strokeLineCap: "round",
+        strokeLineJoin: "round",
         left: 0,
         top: 0,
       });
-      const jamb = new Line([0, 0, object.width, 0], {
-        stroke: SM_INK,
-        strokeWidth: object.strokeWidth,
-        left: 0,
-        top: 0,
-      });
-      const group = new Group([jamb, arc], common);
+      const group = new Group([arc], common);
       setFloorplanMeta(group, { floorplanId: object.id, floorplanType: object.type });
       return group;
     }
@@ -394,48 +447,42 @@ export function createFabricObjectFromFloorplan(object: FloorplanObject): Fabric
     }
 
     case "stair": {
-      const steps = 6;
-      const stepHeight = object.height / steps;
-      const lines = Array.from({ length: steps }, (_, index) => {
-        const y = index * stepHeight;
-        return new Line([0, y, object.width, y], {
-          stroke: SM_INK,
-          strokeWidth: object.strokeWidth,
-        });
-      });
-      const border = new Rect({
-        width: object.width,
-        height: object.height,
-        fill: "transparent",
-        stroke: SM_INK,
-        strokeWidth: object.strokeWidth,
-      });
-      const arrow = new Line(
-        object.direction === "up"
-          ? [object.width / 2, object.height - 8, object.width / 2, 8]
-          : [object.width / 2, 8, object.width / 2, object.height - 8],
+      // Outline, treads about a quarter of the width deep (25 cm on a 1 m stair) and a walking
+      // line with an arrowhead pointing up the stair — one path, so the parts cannot drift.
+      const w = object.width;
+      const h = object.height;
+      const steps = Math.max(3, Math.round(h / (w * 0.25)));
+      const treads = Array.from({ length: steps - 1 }, (_, index) => `M0 ${((index + 1) * h) / steps} h${w}`);
+      const pad = Math.min(w, h) * 0.12;
+      const head = w * 0.12;
+      const [from, to, toward] = object.direction === "up" ? [h - pad, pad, 1] : [pad, h - pad, -1];
+      const stair = new Path(
+        [
+          `M0 0 h${w} v${h} h${-w} Z`,
+          ...treads,
+          `M${w / 2} ${from} V${to}`,
+          `M${w / 2 - head} ${to + toward * head * 1.4} L${w / 2} ${to} L${w / 2 + head} ${to + toward * head * 1.4}`,
+        ].join(" "),
         {
+          fill: "transparent",
           stroke: SM_INK,
           strokeWidth: object.strokeWidth,
+          strokeLineCap: "round",
+          strokeLineJoin: "round",
         },
       );
-      const group = new Group([border, ...lines, arrow], common);
+      const group = new Group([stair], common);
       setFloorplanMeta(group, { floorplanId: object.id, floorplanType: object.type });
       return group;
     }
 
     case "symbol": {
-      const definition = getSymbolById(object.symbolId);
-      const paths = definition?.paths ?? ["M4 4 h40 v40 h-40 Z"];
-      const group = createPathGroup(paths, object.width, object.height, object.stroke, object.fill);
-      group.set({
-        ...common,
-        data: {
-          floorplanId: object.id,
-          floorplanType: object.type,
-        },
-      });
-      return group;
+      const controls = STRETCHABLE_SYMBOL_IDS.has(object.symbolId) ? { controls: createStretchControls() } : {};
+      return createSymbolGroup(
+        object,
+        getSymbolById(object.symbolId) ?? { paths: ["M1 1 h58 v58 h-58 Z"] },
+        { ...common, ...controls },
+      );
     }
 
     case "icon": {
@@ -459,17 +506,7 @@ export function createFabricObjectFromFloorplan(object: FloorplanObject): Fabric
     }
 
     case "furniture": {
-      const definition = getFurnitureById(object.furnitureId);
-      const paths = definition?.paths ?? ["M4 4 h40 v24 h-40 Z"];
-      const group = createPathGroup(paths, object.width, object.height, object.stroke, object.fill);
-      group.set({
-        ...common,
-        data: {
-          floorplanId: object.id,
-          floorplanType: object.type,
-        },
-      });
-      return group;
+      return createSymbolGroup(object, getFurnitureById(object.furnitureId) ?? { paths: ["M1 1 h58 v58 h-58 Z"] }, common);
     }
 
     case "eraserStroke":
@@ -513,12 +550,21 @@ export function floorplanObjectFromFabric(object: FabricObject): FloorplanObject
       if (!(object instanceof Line)) {
         return null;
       }
+      // The ends relative to the bounding box's corner, whichever way the line runs.
       const coords = object.calcLinePoints();
+      const left = object.left ?? 0;
+      const top = object.top ?? 0;
+      const minX = Math.min(coords.x1, coords.x2);
+      const minY = Math.min(coords.y1, coords.y2);
+      const stored = readExtendedObject(object, base);
       return {
         ...base,
+        ...(stored?.type === "wall" && stored.wallId ? { wallId: stored.wallId } : {}),
         type: "wall",
-        x2: (object.left ?? 0) + (coords.x2 - coords.x1),
-        y2: (object.top ?? 0) + (coords.y2 - coords.y1),
+        x: left + (coords.x1 - minX),
+        y: top + (coords.y1 - minY),
+        x2: left + (coords.x2 - minX),
+        y2: top + (coords.y2 - minY),
         strokeWidth: object.strokeWidth ?? SM_EDITOR.wallStroke,
       };
     }
@@ -526,7 +572,10 @@ export function floorplanObjectFromFabric(object: FabricObject): FloorplanObject
       if (!(object instanceof FabricText)) {
         return null;
       }
+      // Fields the canvas cannot show (the room's area) come from the stored object.
+      const stored = readExtendedObject(object, base);
       return {
+        ...(stored?.type === "roomLabel" ? stored : {}),
         ...base,
         type: "roomLabel",
         text: object.text ?? "",
@@ -555,8 +604,10 @@ export function floorplanObjectFromFabric(object: FabricObject): FloorplanObject
         ...windowObject,
         ...base,
         type: "window",
-        width: Math.max(Math.round(object.getScaledWidth()), 1),
-        height: Math.max(Math.round(object.getScaledHeight()), 1),
+        // The stored size times any resize on the canvas: measuring the drawn group instead
+        // lost a pixel to its frame and rounding on every save.
+        width: Math.max(windowObject.width * (object.scaleX ?? 1), 1),
+        height: Math.max((windowObject.height ?? 14) * (object.scaleY ?? 1), 1),
         scaleX: 1,
         scaleY: 1,
       };
@@ -578,6 +629,71 @@ type PartialBase = {
   visible?: boolean;
 };
 
+/**
+ * A counter or wardrobe stretched on the canvas is drawn again at its new size, so its outline
+ * and letters stay true instead of being scaled. Returns the new canvas object, or null when
+ * there was nothing to redraw.
+ */
+/**
+ * An abbreviation's letters stand upright and unstretched whatever is done to its box: turned back
+ * against the box's turn and scaled back against its scale. Exact for boxes square to the plan;
+ * a box stretched at an angle is redrawn true when the drag ends.
+ */
+export function keepLettersUpright(target: FabricObject) {
+  if (!(target instanceof Group)) return;
+  const angle = target.angle ?? 0;
+  // A quarter turn swaps which of the box's sides runs across the plan.
+  const turned = Math.abs(Math.round(angle / 90)) % 2 === 1;
+  const [scaleX, scaleY] = turned ? [target.scaleY ?? 1, target.scaleX ?? 1] : [target.scaleX ?? 1, target.scaleY ?? 1];
+  for (const child of target.getObjects()) {
+    if (child instanceof FabricText) {
+      child.set({ angle: -angle, scaleX: 1 / scaleX, scaleY: 1 / scaleY });
+    }
+  }
+  target.set({ dirty: true });
+}
+
+export function isStretchedBox(target: FabricObject) {
+  const stored = getStoredFloorplanObject(target);
+  return (
+    stored?.type === "symbol" &&
+    STRETCHABLE_SYMBOL_IDS.has(stored.symbolId) &&
+    (Math.abs((target.scaleX ?? 1) - 1) > 1e-6 || Math.abs((target.scaleY ?? 1) - 1) > 1e-6)
+  );
+}
+
+export function redrawStretchedBox(canvas: Canvas, target: FabricObject) {
+  const stored = getStoredFloorplanObject(target);
+  const scaleX = target.scaleX ?? 1;
+  const scaleY = target.scaleY ?? 1;
+  if (stored?.type !== "symbol" || !isStretchedBox(target)) return null;
+
+  const next: FloorplanObject = {
+    ...stored,
+    x: target.left ?? 0,
+    y: target.top ?? 0,
+    rotation: target.angle ?? 0,
+    width: stored.width * scaleX,
+    height: stored.height * scaleY,
+    scaleX: 1,
+    scaleY: 1,
+    // The letters keep the size they had rather than growing with the box.
+    textSize: abbreviationTextSize(stored),
+  };
+  const redrawn = createFabricObjectFromFloorplan(next);
+  attachExtendedData(redrawn, next);
+  const index = canvas.getObjects().indexOf(target);
+  canvas.remove(target);
+  canvas.insertAt(index, redrawn);
+  canvas.setActiveObject(redrawn);
+  return redrawn;
+}
+
+/** The plan object a canvas object was drawn from, as last stored on it. */
+export function getStoredFloorplanObject(object: FabricObject) {
+  return object.get(FLOORPLAN_DATA_KEY) as FloorplanObject | undefined;
+}
+
 function readExtendedObject(object: FabricObject, base: PartialBase): FloorplanObject | null {
   const stored = object.get(FLOORPLAN_DATA_KEY) as FloorplanObject | undefined;
   if (!stored) {
@@ -591,8 +707,51 @@ function readExtendedObject(object: FabricObject, base: PartialBase): FloorplanO
   } as FloorplanObject;
 }
 
+/**
+ * Dragging one piece of a scanned wall drags the wall's other pieces and its doors and windows
+ * by the same amount. Only plain moves count; rotating or stretching a piece moves nothing else.
+ */
+export function moveAttachedObjects(
+  canvas: Canvas,
+  target: FabricObject | undefined,
+  action: string | undefined,
+  originalPosition: { left: number; top: number } | undefined,
+) {
+  const stored = target?.get(FLOORPLAN_DATA_KEY) as FloorplanObject | undefined;
+  if (!target || action !== "drag" || !originalPosition || stored?.type !== "wall" || !stored.wallId) {
+    return;
+  }
+
+  const dx = (target.left ?? 0) - originalPosition.left;
+  const dy = (target.top ?? 0) - originalPosition.top;
+  if (dx === 0 && dy === 0) {
+    return;
+  }
+
+  for (const other of canvas.getObjects()) {
+    const data = other.get(FLOORPLAN_DATA_KEY) as FloorplanObject | undefined;
+    if (other === target || !data || !("wallId" in data) || data.wallId !== stored.wallId) {
+      continue;
+    }
+    other.set({ left: (other.left ?? 0) + dx, top: (other.top ?? 0) + dy });
+    other.setCoords();
+  }
+}
+
 export function attachExtendedData(object: FabricObject, source: FloorplanObject) {
   object.set(FLOORPLAN_DATA_KEY, source);
+}
+
+/**
+ * Canvas text does not wait for web fonts: drawn before the font arrives, a label is measured
+ * and painted in the fallback. Loading it first keeps the first render right.
+ */
+async function loadRoomLabelFont() {
+  try {
+    await globalThis.document?.fonts?.load(`${SM_ROOM_LABEL_WEIGHT} 16px Jost`);
+  } catch {
+    // The labels fall back to Arial; nothing else depends on the font.
+  }
 }
 
 export async function renderDocumentToCanvas(
@@ -600,7 +759,7 @@ export async function renderDocumentToCanvas(
   document: FloorplanDocument,
   backgroundUrl: string,
 ) {
-  const background = await loadFloorplanBackgroundImage(backgroundUrl);
+  const [background] = await Promise.all([loadFloorplanBackgroundImage(backgroundUrl), loadRoomLabelFont()]);
   if (!isCanvasOperational(canvas)) {
     return;
   }

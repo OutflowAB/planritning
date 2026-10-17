@@ -2,6 +2,7 @@
 
 import {
   createDefaultDimension,
+  createDefaultWall,
   createDefaultDoor,
   createDefaultFurniture,
   createDefaultRoomLabel,
@@ -24,6 +25,10 @@ import {
   getFloorplanMeta,
   hasFloorplanBackground,
   isCanvasOperational,
+  isStretchedBox,
+  keepLettersUpright,
+  moveAttachedObjects,
+  redrawStretchedBox,
   renderDocumentToCanvas,
   sortFloorplanObjectsByLayer,
   syncCanvasToDocument,
@@ -37,13 +42,23 @@ import {
   undoHistory,
   type FloorplanHistoryState,
 } from "@/lib/floorplan/history";
-import { getFurnitureById, getSymbolById } from "@/lib/floorplan/symbol-library";
+import { defaultIconSize, getFurnitureById, getSymbolById } from "@/lib/floorplan/symbol-library";
 import { ApiError, apiFetch } from "@/lib/api-client";
+import { formatMeters, lineLengthInMeters } from "@/lib/floorplan/measure";
+import { originalDocument } from "@/lib/floorplan/original-document";
+import { rotatePlanQuarterTurn } from "@/lib/floorplan/rotate-plan";
+import { defaultObjectScale, SM_EDITOR } from "@/lib/sm-floorplan-layout";
+import { wallCentreLine, wallFromClicks } from "@/lib/floorplan/wall-placement";
 import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
-import { renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-library";
+import { type HouseText, renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-library";
 import { publishFloorplanImage } from "@/lib/floorplan/publish-floorplan";
 import { imageDownloadBaseName } from "@/lib/image-naming";
-import { snapFloorplanObjectPosition } from "@/lib/floorplan/fabric/object-snapping";
+import { canvasPixels, setHandleScale } from "@/lib/floorplan/fabric/canva-controls";
+import {
+  snapFloorplanObjectPosition,
+  snapStretchToWalls,
+  snapToWallsAndCounters,
+} from "@/lib/floorplan/fabric/object-snapping";
 import type { EditorTool, FloorplanDocument, FloorplanObject } from "@/lib/floorplan/types";
 import { createObjectId } from "@/lib/floorplan/types";
 import type { Canvas, FabricObject } from "fabric";
@@ -68,6 +83,17 @@ export const FLOORPLAN_ZOOM_STEP = 1.15;
 export const FLOORPLAN_NUDGE_STEP = 1;
 export const FLOORPLAN_NUDGE_STEP_LARGE = 10;
 export const FLOORPLAN_AUTO_SAVE_DEBOUNCE_MS = 800;
+/** Typical sizes in metres for things drawn by hand on a plan with a scale. */
+const REAL_SIZE_M = {
+  doorWidth: 0.9,
+  windowWidth: 1.2,
+  windowDepth: 0.15,
+  stairWidth: 1,
+  stairLength: 2.5,
+  wallThickness: 0.15,
+};
+// How close, on screen, a click must come to a wall for a new wall to join it.
+const WALL_SNAP_SCREEN_PIXELS = 12;
 
 function clampZoomLevel(value: number) {
   return Math.min(FLOORPLAN_MAX_ZOOM, Math.max(FLOORPLAN_MIN_ZOOM, value));
@@ -97,6 +123,8 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
   const [zoomLevel, setZoomLevelState] = useState(1);
   const placementStartRef = useRef<{ x: number; y: number } | null>(null);
   const documentRef = useRef<FloorplanDocument | null>(null);
+  /** The plan as first created (an imported scan), which "Original" returns to. */
+  const [sourceDocument, setSourceDocument] = useState<FloorplanDocument | null>(null);
   const syncFromCanvasRef = useRef<() => void>(() => {});
   const clipboardRef = useRef<FloorplanObject | null>(null);
   const pasteCountRef = useRef(0);
@@ -190,10 +218,34 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
       canvas.on("selection:cleared", () => {
         setSelectedObjectId(null);
       });
-      canvas.on("object:modified", () => {
+      // Registered after the alignment guides, so a wall or counter has the last word.
+      canvas.on("object:moving", (event) => {
+        snapToWallsAndCounters(canvas, event.target);
+      });
+      canvas.on("object:scaling", (event) => {
+        snapStretchToWalls(canvas, event.target, event.transform);
+        keepLettersUpright(event.target);
+      });
+      canvas.on("object:rotating", (event) => {
+        keepLettersUpright(event.target);
+      });
+      canvas.on("object:modified", (event) => {
         if (canvas.isDrawingMode) {
           return;
         }
+        const target = event.target;
+        // Turned square, a fitting may now stand against a wall.
+        if (target && event.action === "rotate") snapToWallsAndCounters(canvas, target);
+        if (target && isStretchedBox(target)) {
+          // A stretched counter is redrawn at its new size once Fabric has finished the drag:
+          // replacing it inside this event would start the event again.
+          setTimeout(() => {
+            redrawStretchedBox(canvas, target);
+            syncFromCanvasRef.current();
+          });
+          return;
+        }
+        moveAttachedObjects(canvas, event.target, event.action, event.transform?.original);
         syncFromCanvasRef.current();
       });
 
@@ -246,8 +298,12 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
           const response = await apiFetch(`/api/floorplan-document?${params.toString()}`, {
             cache: "no-store",
           });
-          const data = (await response.json()) as { document?: FloorplanDocument };
+          const data = (await response.json()) as {
+            document?: FloorplanDocument;
+            sourceDocument?: FloorplanDocument | null;
+          };
           nextDocument = data.document ?? null;
+          setSourceDocument(data.sourceDocument ?? null);
         } catch (error) {
           // No saved document yet is a normal state; anything else is a real failure.
           if (!(error instanceof ApiError && error.kind === "not-found")) {
@@ -320,6 +376,8 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
         },
         { cssOnly: true },
       );
+      setHandleScale(canvas.getWidth() / size.width);
+      canvas.getActiveObject()?.setCoords();
       canvas.requestRenderAll();
     },
     [],
@@ -377,12 +435,51 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
   );
 
   const handleCanvasPointer = useCallback(
-    (point: { x: number; y: number }) => {
+    (point: { x: number; y: number }, modifiers: { shift?: boolean } = {}) => {
       if (!document) {
         return;
       }
 
       if (activeTool === "eraser" || activeTool === "select") {
+        return;
+      }
+
+      // On a plan with a scale (a scan), new things get real sizes and measured labels; on any
+      // plan, built-in sizes are fitted to the canvas.
+      const pxPerMeter = document.scale?.pxPerMeter;
+      const sizeScale = defaultObjectScale(document.canvas.width);
+      // Icons are defined at their real size in centimetres.
+      const iconSize = (definition: { size: readonly [number, number] } | null) => {
+        const size = definition?.size ?? [60, 60];
+        if (pxPerMeter) {
+          return { width: (size[0] / 100) * pxPerMeter, height: (size[1] / 100) * pxPerMeter };
+        }
+        const builtIn = defaultIconSize({ size });
+        return { width: builtIn.width * sizeScale, height: builtIn.height * sizeScale };
+      };
+
+      if (activeTool === "wall") {
+        if (!placementStartRef.current) {
+          placementStartRef.current = point;
+          return;
+        }
+
+        const start = placementStartRef.current;
+        // Real wall thickness on a plan with a scale; the house stroke otherwise.
+        const strokeWidth = pxPerMeter ? Math.max(SM_EDITOR.wallStroke, REAL_SIZE_M.wallThickness * pxPerMeter) : SM_EDITOR.wallStroke;
+        const walls = document.objects.flatMap((object) => (object.type === "wall" ? [wallCentreLine(object)] : []));
+        const wall = wallFromClicks(start, point, {
+          strokeWidth,
+          walls,
+          reach: canvasPixels(WALL_SNAP_SCREEN_PIXELS),
+          straight: Boolean(modifiers.shift),
+        });
+        if (Math.hypot(wall.x2 - wall.x, wall.y2 - wall.y) < strokeWidth) {
+          return;
+        }
+        addObject({ ...createDefaultWall(wall.x, wall.y), ...wall } as FloorplanObject);
+        // The next wall carries on from this one's end, until Escape or another tool.
+        placementStartRef.current = { x: wall.x2 + strokeWidth / 2, y: wall.y2 + strokeWidth / 2 };
         return;
       }
 
@@ -394,11 +491,13 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
 
         const start = placementStartRef.current;
         placementStartRef.current = null;
+        const line = { x: start.x, y: start.y, x2: point.x, y2: point.y };
 
         addObject({
           ...createDefaultDimension(start.x, start.y),
           x2: point.x,
           y2: point.y,
+          ...(document.scale ? { label: formatMeters(lineLengthInMeters(document.scale, line)) } : {}),
         } as FloorplanObject);
         setActiveTool("select");
         return;
@@ -406,41 +505,51 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
 
       switch (activeTool) {
         case "roomLabel":
-          addObject(createDefaultRoomLabel(point.x, point.y));
+          addObject(createDefaultRoomLabel(point.x, point.y, document.canvas.width));
           break;
-        case "door":
-          addObject(createDefaultDoor(point.x, point.y));
+        case "door": {
+          const door = createDefaultDoor(point.x, point.y, sizeScale);
+          addObject(
+            pxPerMeter ? ({ ...door, width: REAL_SIZE_M.doorWidth * pxPerMeter } as FloorplanObject) : door,
+          );
           break;
-        case "window":
-          addObject(createDefaultWindow(point.x, point.y));
+        }
+        case "window": {
+          const windowObject = createDefaultWindow(point.x, point.y, sizeScale);
+          addObject(
+            pxPerMeter
+              ? ({
+                  ...windowObject,
+                  width: REAL_SIZE_M.windowWidth * pxPerMeter,
+                  height: Math.max(REAL_SIZE_M.windowDepth * pxPerMeter, 6),
+                } as FloorplanObject)
+              : windowObject,
+          );
           break;
-        case "stair":
-          addObject(createDefaultStair(point.x, point.y));
+        }
+        case "stair": {
+          const stair = createDefaultStair(point.x, point.y, sizeScale);
+          addObject(
+            pxPerMeter
+              ? ({
+                  ...stair,
+                  width: REAL_SIZE_M.stairWidth * pxPerMeter,
+                  height: REAL_SIZE_M.stairLength * pxPerMeter,
+                } as FloorplanObject)
+              : stair,
+          );
           break;
+        }
         case "symbol": {
           const symbol = getSymbolById(selectedSymbolId);
-          addObject(
-            createDefaultSymbol(
-              point.x,
-              point.y,
-              selectedSymbolId,
-              symbol?.defaultWidth ?? 40,
-              symbol?.defaultHeight ?? 40,
-            ),
-          );
+          const { width, height } = iconSize(symbol);
+          addObject(createDefaultSymbol(point.x, point.y, selectedSymbolId, width, height));
           break;
         }
         case "furniture": {
           const furniture = getFurnitureById(selectedFurnitureId);
-          addObject(
-            createDefaultFurniture(
-              point.x,
-              point.y,
-              selectedFurnitureId,
-              furniture?.defaultWidth ?? 48,
-              furniture?.defaultHeight ?? 48,
-            ),
-          );
+          const { width, height } = iconSize(furniture);
+          addObject(createDefaultFurniture(point.x, point.y, selectedFurnitureId, width, height));
           break;
         }
         default:
@@ -625,24 +734,34 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
       return false;
     }
 
-    const nextDocument = touchDocument(
-      createEmptyDocument({
-        imageId: currentDocument.meta.imageId,
-        imagePath: currentDocument.meta.imagePath,
-        fileName: currentDocument.meta.fileName,
-        canvasWidth: currentDocument.canvas.width,
-        canvasHeight: currentDocument.canvas.height,
-      }),
-    );
+    const nextDocument = touchDocument(originalDocument(currentDocument, sourceDocument));
 
     documentRef.current = nextDocument;
     commitDocument(nextDocument);
     setSelectedObjectId(null);
     setRenderRevision((version) => version + 1);
     return true;
+  }, [commitDocument, sourceDocument]);
+
+  const canResetToOriginal = Boolean(document && (document.objects.length > 0 || sourceDocument));
+
+  /** A quarter turn of the whole plan, refitted to the page: one step to undo. */
+  const rotatePlan = useCallback(() => {
+    const canvas = canvasRef.current;
+    const currentDocument = documentRef.current;
+    if (!canvas || !currentDocument?.drawingArea) {
+      return;
+    }
+
+    const nextDocument = touchDocument(rotatePlanQuarterTurn(syncCanvasToDocument(canvas, currentDocument)));
+    documentRef.current = nextDocument;
+    commitDocument(nextDocument);
+    setSelectedObjectId(null);
+    setRenderRevision((version) => version + 1);
   }, [commitDocument]);
 
-  const canResetToOriginal = Boolean(document && document.objects.length > 0);
+  // Only blank and scanned plans know their drawing area; an AI-redrawn image cannot turn.
+  const canRotatePlan = Boolean(document?.drawingArea && document.objects.length > 0);
 
   const saveDocument = useCallback(async () => {
     const canvas = canvasRef.current;
@@ -674,10 +793,11 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
     }
   }, [approvedImage.file_path, approvedImage.id, document, onError]);
 
-  const publishFlattenedImage = useCallback(async () => {
+  const publishFlattenedImage = useCallback(async (houseText: HouseText) => {
     const canvas = canvasRef.current;
     const currentDocument = documentRef.current;
-    if (!canvas || !currentDocument || currentDocument.objects.length === 0) {
+    // Every finish is published and billed, an empty plan too.
+    if (!canvas || !currentDocument) {
       return true;
     }
 
@@ -686,6 +806,7 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
       latestDocument,
       approvedImage.id,
       approvedImage.file_path,
+      houseText,
     );
 
     await publishFloorplanImage({
@@ -698,25 +819,6 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
     setIsDirty(false);
     return true;
   }, [approvedImage.file_path, approvedImage.id]);
-
-  const discardDocumentChanges = useCallback(async () => {
-    skipPersistRef.current = true;
-    setIsDirty(false);
-
-    try {
-      const params = new URLSearchParams({
-        imageId: String(approvedImage.id),
-        imagePath: approvedImage.file_path,
-      });
-      await apiFetch(`/api/floorplan-document?${params.toString()}`, { method: "DELETE" });
-
-      return true;
-    } catch (error) {
-      skipPersistRef.current = false;
-      onError(error instanceof Error ? error.message : "Kunde inte ta bort planritningsdata.");
-      return false;
-    }
-  }, [approvedImage.file_path, approvedImage.id, onError]);
 
   useLayoutEffect(() => {
     saveDocumentRef.current = saveDocument;
@@ -780,6 +882,21 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
 
       const modifier = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
+
+      // Escape steps back one level: a wall or measurement half-placed, then the selection,
+      // then the tool.
+      if (key === "escape") {
+        if (placementStartRef.current) {
+          placementStartRef.current = null;
+        } else if (selectedObjectId) {
+          canvasRef.current?.discardActiveObject();
+          canvasRef.current?.requestRenderAll();
+          setSelectedObjectId(null);
+        } else if (activeTool !== "select") {
+          setActiveTool("select");
+        }
+        return;
+      }
 
       if (modifier && key === "z" && !event.shiftKey) {
         event.preventDefault();
@@ -882,9 +999,10 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
     canUndo: history ? canUndo(history) : false,
     canRedo: history ? canRedo(history) : false,
     canResetToOriginal,
+    rotatePlan,
+    canRotatePlan,
     saveDocument,
     publishFlattenedImage,
-    discardDocumentChanges,
     renderCanvas,
     applyDisplayScale,
     zoomLevel,

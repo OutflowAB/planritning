@@ -54,8 +54,12 @@ export async function verifySessionRole(): Promise<string | null | undefined> {
   inFlight = (async () => {
     try {
       const response = await fetch("/api/auth/session", { credentials: "include" });
-      const data = (await response.json()) as { role?: string | null };
+      const data = (await response.json()) as { role?: string | null; mustChangePassword?: boolean };
       const role = data.role ?? null;
+      // A temporary password has to be replaced before any page is used.
+      if (role && data.mustChangePassword && !window.location.pathname.startsWith("/byt-losenord")) {
+        window.location.assign("/byt-losenord");
+      }
       cachedSession = { role, checkedAt: Date.now() };
       return role;
     } finally {
