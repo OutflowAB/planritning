@@ -7,9 +7,9 @@ import {
   Eraser,
   LayoutGrid,
   MousePointer2,
+  Minus,
   MoveHorizontal,
   Ruler,
-  Sofa,
   Trash2,
   Type,
 } from "lucide-react";
@@ -32,13 +32,13 @@ const DISABLED_TOOLS: ReadonlySet<EditorTool> = new Set(["furniture"]);
 const TOOLS: ToolDefinition[] = [
   { id: "select", label: "Markera", icon: <MousePointer2 size={18} /> },
   { id: "eraser", label: "Sudda", icon: <Eraser size={18} /> },
+  { id: "wall", label: "Vägg", icon: <Minus size={18} />, hint: "Klicka start och slut, Shift för rak vägg, Esc för att sluta" },
   { id: "roomLabel", label: "Rum", icon: <Type size={18} /> },
   { id: "dimension", label: "Mått", icon: <Ruler size={18} />, hint: "Klicka start och slut" },
   { id: "door", label: "Dörr", icon: <DoorOpen size={18} /> },
   { id: "window", label: "Fönster", icon: <AppWindow size={18} /> },
   { id: "stair", label: "Trappa", icon: <MoveHorizontal size={18} /> },
   { id: "symbol", label: "Symbol", icon: <LayoutGrid size={18} /> },
-  { id: "furniture", label: "Möbler", icon: <Sofa size={18} /> },
 ];
 
 type EditorToolbarProps = {

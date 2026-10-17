@@ -197,7 +197,10 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
       }
 
       const pointer = activeCanvas.getScenePoint(options.e as MouseEvent);
-      controllerRef.current.handleCanvasPointer({ x: pointer.x, y: pointer.y });
+      controllerRef.current.handleCanvasPointer(
+        { x: pointer.x, y: pointer.y },
+        { shift: (options.e as MouseEvent).shiftKey },
+      );
     }
 
     canvas.on("mouse:down", handleMouseDown);

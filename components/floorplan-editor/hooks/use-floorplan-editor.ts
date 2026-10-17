@@ -2,6 +2,7 @@
 
 import {
   createDefaultDimension,
+  createDefaultWall,
   createDefaultDoor,
   createDefaultFurniture,
   createDefaultRoomLabel,
@@ -43,12 +44,13 @@ import {
 } from "@/lib/floorplan/history";
 import { getFurnitureById, getSymbolById } from "@/lib/floorplan/symbol-library";
 import { ApiError, apiFetch } from "@/lib/api-client";
-import { defaultObjectScale } from "@/lib/sm-floorplan-layout";
+import { defaultObjectScale, SM_EDITOR } from "@/lib/sm-floorplan-layout";
+import { wallCentreLine, wallFromClicks } from "@/lib/floorplan/wall-placement";
 import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
 import { renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-library";
 import { publishFloorplanImage } from "@/lib/floorplan/publish-floorplan";
 import { imageDownloadBaseName } from "@/lib/image-naming";
-import { setHandleScale } from "@/lib/floorplan/fabric/canva-controls";
+import { canvasPixels, setHandleScale } from "@/lib/floorplan/fabric/canva-controls";
 import {
   snapFloorplanObjectPosition,
   snapStretchToWalls,
@@ -81,6 +83,8 @@ export const FLOORPLAN_ZOOM_STEP = 1.15;
 export const FLOORPLAN_NUDGE_STEP = 1;
 export const FLOORPLAN_NUDGE_STEP_LARGE = 10;
 export const FLOORPLAN_AUTO_SAVE_DEBOUNCE_MS = 800;
+// How close, on screen, a click must come to a wall for a new wall to join it.
+const WALL_SNAP_SCREEN_PIXELS = 12;
 
 function clampZoomLevel(value: number) {
   return Math.min(FLOORPLAN_MAX_ZOOM, Math.max(FLOORPLAN_MIN_ZOOM, value));
@@ -101,6 +105,7 @@ const REAL_SIZE_M = {
   windowDepth: 0.15,
   stairWidth: 1,
   stairLength: 2.5,
+  wallThickness: 0.15,
 };
 
 export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEditorOptions) {
@@ -433,7 +438,7 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
   );
 
   const handleCanvasPointer = useCallback(
-    (point: { x: number; y: number }) => {
+    (point: { x: number; y: number }, modifiers: { shift?: boolean } = {}) => {
       if (!document) {
         return;
       }
@@ -446,6 +451,31 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
       // plan, built-in sizes are fitted to the canvas.
       const pxPerMeter = document.scale?.pxPerMeter;
       const sizeScale = defaultObjectScale(document.canvas.width);
+
+      if (activeTool === "wall") {
+        if (!placementStartRef.current) {
+          placementStartRef.current = point;
+          return;
+        }
+
+        const start = placementStartRef.current;
+        // Real wall thickness on a plan with a scale; the house stroke otherwise.
+        const strokeWidth = pxPerMeter ? Math.max(SM_EDITOR.wallStroke, REAL_SIZE_M.wallThickness * pxPerMeter) : SM_EDITOR.wallStroke;
+        const walls = document.objects.flatMap((object) => (object.type === "wall" ? [wallCentreLine(object)] : []));
+        const wall = wallFromClicks(start, point, {
+          strokeWidth,
+          walls,
+          reach: canvasPixels(WALL_SNAP_SCREEN_PIXELS),
+          straight: Boolean(modifiers.shift),
+        });
+        if (Math.hypot(wall.x2 - wall.x, wall.y2 - wall.y) < strokeWidth) {
+          return;
+        }
+        addObject({ ...createDefaultWall(wall.x, wall.y), ...wall } as FloorplanObject);
+        // The next wall carries on from this one's end, until Escape or another tool.
+        placementStartRef.current = { x: wall.x2 + strokeWidth / 2, y: wall.y2 + strokeWidth / 2 };
+        return;
+      }
 
       if (activeTool === "dimension") {
         if (!placementStartRef.current) {
@@ -885,6 +915,21 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
 
       const modifier = event.metaKey || event.ctrlKey;
       const key = event.key.toLowerCase();
+
+      // Escape steps back one level: a wall or measurement half-placed, then the selection,
+      // then the tool.
+      if (key === "escape") {
+        if (placementStartRef.current) {
+          placementStartRef.current = null;
+        } else if (selectedObjectId) {
+          canvasRef.current?.discardActiveObject();
+          canvasRef.current?.requestRenderAll();
+          setSelectedObjectId(null);
+        } else if (activeTool !== "select") {
+          setActiveTool("select");
+        }
+        return;
+      }
 
       if (modifier && key === "z" && !event.shiftKey) {
         event.preventDefault();
