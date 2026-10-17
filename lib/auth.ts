@@ -1,7 +1,15 @@
 export const AUTH_STORAGE_KEY = "sm_planritning_auth";
 export const AUTH_ROLE_STORAGE_KEY = "sm_planritning_auth_role";
 
-export type UserRole = "user" | "admin";
+/** A realtor, the firm's superadmin, or the single developer account (spending and usage only). */
+export type UserRole = "user" | "admin" | "dev";
+
+/** Where each kind of account lands after signing in. */
+export function homePathForRole(role: UserRole | null): string {
+  if (role === "admin") return "/admin/dashboard";
+  if (role === "dev") return "/dev";
+  return "/konverterare";
+}
 
 export function isAuthenticated(): boolean {
   if (typeof window === "undefined") {
@@ -17,7 +25,7 @@ export function getStoredRole(): UserRole | null {
   }
 
   const role = window.localStorage.getItem(AUTH_ROLE_STORAGE_KEY);
-  if (role === "user" || role === "admin") {
+  if (role === "user" || role === "admin" || role === "dev") {
     return role;
   }
 

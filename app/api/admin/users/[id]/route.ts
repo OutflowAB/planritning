@@ -32,7 +32,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     .select(PROFILE_COLUMNS)
     .eq("id", id)
     .maybeSingle<ProfileRow>();
-  if (!profile) {
+  // The developer account is not the superadmin's to see or change.
+  if (!profile || profile.role === "dev") {
     return NextResponse.json({ message: "Användaren finns inte." }, { status: 404 });
   }
 
@@ -72,6 +73,16 @@ export async function DELETE(_request: Request, context: { params: Promise<{ id:
   const { id } = await context.params;
   if (id === session.userId) {
     return NextResponse.json({ message: "Du kan inte ta bort ditt eget konto." }, { status: 400 });
+  }
+
+  // The developer account is not the superadmin's to see or change.
+  const { data: target } = await supabase
+    .from(PROFILES_TABLE)
+    .select("role")
+    .eq("id", id)
+    .maybeSingle<{ role: string }>();
+  if (!target || target.role === "dev") {
+    return NextResponse.json({ message: "Användaren finns inte." }, { status: 404 });
   }
 
   // Plans and bills keep their owner, so a user with history is disabled rather than removed.

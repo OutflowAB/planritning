@@ -148,14 +148,24 @@ export async function getSession(): Promise<Session | null> {
 
 export type SessionCheck = ({ ok: true } & Session) | { ok: false; response: NextResponse };
 
+type SessionOptions = { role?: UserRole; allowPendingPassword?: boolean; allowDev?: boolean };
+
+/**
+ * Whether an account of this role may use a route. A route that names a role is for that role
+ * only. The developer account sees spending and usage and nothing else, so it is turned away
+ * from every other route unless the route says `allowDev` (changing its own password).
+ */
+export function roleMayUse(role: UserRole, options: Pick<SessionOptions, "role" | "allowDev">): boolean {
+  if (options.role) return role === options.role;
+  return role !== "dev" || options.allowDev === true;
+}
+
 /**
  * Gate for API routes. 401 means "no valid session" and the client signs the user out; 403
  * means "signed in, but not allowed". A user with a temporary password gets 403
  * `password_change_required` everywhere except the routes that let them change it.
  */
-export async function requireSession(
-  options: { role?: UserRole; allowPendingPassword?: boolean } = {},
-): Promise<SessionCheck> {
+export async function requireSession(options: SessionOptions = {}): Promise<SessionCheck> {
   const session = await getSession();
 
   if (!session) {
@@ -178,7 +188,7 @@ export async function requireSession(
     };
   }
 
-  if (options.role === "admin" && !session.isAdmin) {
+  if (!roleMayUse(session.role, options)) {
     return {
       ok: false,
       response: NextResponse.json(

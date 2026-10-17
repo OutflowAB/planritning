@@ -13,7 +13,7 @@ type PasswordBody = { currentPassword?: string; newPassword?: string };
 
 /** Changes the signed-in user's password; required before anything else after a reset. */
 export async function POST(request: Request) {
-  const session = await requireSession({ allowPendingPassword: true });
+  const session = await requireSession({ allowPendingPassword: true, allowDev: true });
   if (!session.ok) return session.response;
 
   const supabase = getAdminSupabase();

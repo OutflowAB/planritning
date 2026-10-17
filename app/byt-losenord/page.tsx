@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
 import { describeError, apiFetch } from "@/lib/api-client";
-import { getStoredRole } from "@/lib/auth";
+import { getStoredRole, homePathForRole } from "@/lib/auth";
 import { clearSessionCache } from "@/lib/auth-session";
 
 const inputClass =
@@ -36,7 +36,7 @@ export default function ChangePasswordPage() {
         body: JSON.stringify({ currentPassword, newPassword }),
       });
       clearSessionCache();
-      router.replace(getStoredRole() === "admin" ? "/admin/dashboard" : "/konverterare");
+      router.replace(homePathForRole(getStoredRole()));
     } catch (caught) {
       setError(describeError(caught, "Kunde inte byta lösenord.") ?? "");
     } finally {

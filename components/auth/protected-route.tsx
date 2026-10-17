@@ -8,6 +8,7 @@ import {
   AUTH_ROLE_STORAGE_KEY,
   AUTH_STORAGE_KEY,
   getStoredRole,
+  homePathForRole,
   isAuthenticated,
   type UserRole,
 } from "@/lib/auth";
@@ -95,13 +96,16 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
   }, [hasStoredSession, router]);
 
   useEffect(() => {
-    if (!isAllowed || !requiredRole) {
+    if (!isAllowed) {
       return;
     }
 
+    // A page for one role sends everyone else home; the developer account has no use for the
+    // pages that need no role (they are the realtors'), so it is sent to its own.
     const currentRole = getStoredRole();
-    if (currentRole !== requiredRole) {
-      router.replace(currentRole === "admin" ? "/admin/dashboard" : "/konverterare");
+    const wrongRole = requiredRole ? currentRole !== requiredRole : currentRole === "dev";
+    if (wrongRole) {
+      router.replace(homePathForRole(currentRole));
     }
   }, [isAllowed, requiredRole, router]);
 

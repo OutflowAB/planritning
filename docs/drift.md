@@ -43,6 +43,21 @@ Under **Användare** i adminpanelen:
 
 Fem felaktiga lösenord på 15 minuter spärrar e-postadressen i 15 minuter.
 
+## Utvecklarkonto
+
+Det finns ett enda konto för oss som utvecklar: det ser **användning och kostnader** men aldrig
+planritningar, adresser eller bilder.
+
+- Skapas bara med skriptet, aldrig i Användare, och bara ett får finnas (databasen stoppar ett
+  andra): `node scripts/create-superadmin.mjs <e-post> "<namn>" --dev`. Lösenordet byts vid
+  första inloggningen, som för alla andra.
+- Superadmin ser inte kontot i listan och kan inte ändra eller ta bort det.
+- Sidan **/dev** visar för innevarande månad vad som fakturerats, antal AI-omgörningar mot
+  kvoten, en **uppskattad** AI-kostnad och marginalen, per mäklare och för de senaste sex
+  månaderna, samt lagring. Kostnaden är antal omgörningar gånger `AI_COST_PER_GENERATION_SEK`
+  (standard 4 kr); OpenAI:s egen faktura är det som gäller.
+- Kontot kan inte använda mäklarnas sidor eller något annat i API:et.
+
 ## Fakturering
 
 - Varje **Slutför** kostar `PLAN_PRICE_SEK` (standard 50 kr), även när en plan slutförs igen

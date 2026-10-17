@@ -4,15 +4,7 @@ import Image from "next/image";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { getStoredRole, isAuthenticated, setAuthenticated, type UserRole } from "@/lib/auth";
-
-function getRedirectPathByRole(role: UserRole | null): string {
-  if (role === "admin") {
-    return "/admin/dashboard";
-  }
-
-  return "/konverterare";
-}
+import { getStoredRole, homePathForRole, isAuthenticated, setAuthenticated, type UserRole } from "@/lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -23,7 +15,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (isAuthenticated()) {
-      router.replace(getRedirectPathByRole(getStoredRole()));
+      router.replace(homePathForRole(getStoredRole()));
     }
   }, [router]);
 
@@ -53,10 +45,10 @@ export default function LoginPage() {
         return;
       }
 
-      const role = data.role === "admin" ? "admin" : "user";
+      const role: UserRole = data.role === "admin" || data.role === "dev" ? data.role : "user";
       setAuthenticated(true, role);
       // A temporary password from the superadmin has to be replaced before anything else.
-      router.replace(data.mustChangePassword ? "/byt-losenord" : getRedirectPathByRole(role));
+      router.replace(data.mustChangePassword ? "/byt-losenord" : homePathForRole(role));
     } catch {
       setError("Ett oväntat fel uppstod. Försök igen.");
       setAuthenticated(false);

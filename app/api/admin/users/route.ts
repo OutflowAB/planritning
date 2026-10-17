@@ -15,6 +15,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from(PROFILES_TABLE)
     .select(PROFILE_COLUMNS)
+    .neq("role", "dev")
     .order("display_name")
     .returns<ProfileRow[]>();
   if (error) {
