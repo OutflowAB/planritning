@@ -28,6 +28,7 @@ import { buttonClass, iconButtonClass } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { EditableTitle } from "@/components/ui/editable-title";
 import { saveImageLabel } from "@/lib/image-label";
+import { BLANK_FLOORPLAN_PREFIX } from "@/lib/floorplan/image-url";
 import { searchable } from "@/lib/search-text";
 import { Page, PageHeader } from "@/components/layout/page";
 import { floorLabel, groupLibraryItems, parseFloorGroup, type LibraryEntry } from "@/lib/floor-groups";
@@ -64,6 +65,7 @@ type GeneratedImageRow = {
   preview_url: string | null;
   full_url: string | null;
   label: string | null;
+  floor_label: string | null;
   source_upload_id: number | null;
 };
 
@@ -80,6 +82,7 @@ function withImageUrls(item: ImageListItem): GeneratedImageRow {
     preview_url: isImage ? imageUrl(item.id, "thumb", item.version) : null,
     full_url: isImage ? imageUrl(item.id, "full", item.version) : null,
     label: item.label ?? null,
+    floor_label: item.floor_label ?? null,
     source_upload_id: item.source_upload_id ?? null,
   };
 }
@@ -330,6 +333,10 @@ export default function BibliotekPage() {
         imagePath: previewImage.file_path,
         fileName: imageDownloadBaseName(previewImage.id),
         format,
+        // A scanned or blank plan is redrawn from its document, with its address and floor on it.
+        houseText: previewImage.file_path.startsWith(BLANK_FLOORPLAN_PREFIX)
+          ? { address: previewImage.label, floorLabel: previewImage.floor_label }
+          : undefined,
         fallbackUrl: previewImage.full_url,
       });
       setShowDownloadMenu(false);

@@ -41,12 +41,27 @@ const TOOLS: ToolDefinition[] = [
   { id: "symbol", label: "Symbol", icon: <LayoutGrid size={18} /> },
 ];
 
+/** Floor labels from the reference plans; any other label can be typed. */
+const FLOOR_LABELS = ["ENTRÉPLAN", "PLAN 2", "PLAN 3", "ÖVERVÅNING", "SOUTERRÄNG", "KÄLLARE", "VIND"];
+
+export type PlanMeta = { address: string; floorLabel: string };
+
 type EditorToolbarProps = {
   controller: FloorplanEditorController;
   isLoading?: boolean;
+  /** The plan's address and floor, printed on a finished scanned plan. */
+  planMeta?: PlanMeta;
+  onPlanMetaChange?: (meta: PlanMeta) => void;
+  onPlanMetaCommit?: () => void;
 };
 
-export function EditorToolbar({ controller, isLoading = false }: EditorToolbarProps) {
+export function EditorToolbar({
+  controller,
+  isLoading = false,
+  planMeta,
+  onPlanMetaChange,
+  onPlanMetaCommit,
+}: EditorToolbarProps) {
   const showSymbolLibrary = controller.activeTool === "symbol";
   const showFurnitureLibrary = controller.activeTool === "furniture";
   const showDimensionMode = controller.activeTool === "dimension";
@@ -155,12 +170,40 @@ export function EditorToolbar({ controller, isLoading = false }: EditorToolbarPr
                   <span>Radera</span>
                 </button>
               </div>
-            ) : totalArea ? (
-              <div className="ml-2 flex min-w-0 flex-1 items-end gap-3 border-l border-stone-100 pl-3">
-                <ReadOnlyField
-                  label={`Total yta (${totalArea.rooms} rum)`}
-                  value={`ca ${formatSquareMeters(totalArea.squareMeters)}`}
-                />
+            ) : planMeta || totalArea ? (
+              <div className="ml-2 flex min-w-0 flex-1 items-end gap-3 overflow-x-auto border-l border-stone-100 pl-3">
+                {planMeta && onPlanMetaChange ? (
+                  <>
+                    <TextField
+                      label="Adress"
+                      value={planMeta.address}
+                      maxLength={120}
+                      onChange={(value) => onPlanMetaChange({ ...planMeta, address: value })}
+                      onBlur={onPlanMetaCommit}
+                      className="min-w-[160px]"
+                    />
+                    <TextField
+                      label="Våning"
+                      value={planMeta.floorLabel}
+                      maxLength={40}
+                      list="floor-labels"
+                      onChange={(value) => onPlanMetaChange({ ...planMeta, floorLabel: value.toUpperCase() })}
+                      onBlur={onPlanMetaCommit}
+                      className="min-w-[110px]"
+                    />
+                    <datalist id="floor-labels">
+                      {FLOOR_LABELS.map((label) => (
+                        <option key={label} value={label} />
+                      ))}
+                    </datalist>
+                  </>
+                ) : null}
+                {totalArea ? (
+                  <ReadOnlyField
+                    label={`Total yta (${totalArea.rooms} rum)`}
+                    value={`ca ${formatSquareMeters(totalArea.squareMeters)}`}
+                  />
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -360,11 +403,17 @@ function TextField({
   label,
   value,
   onChange,
+  onBlur,
+  maxLength,
+  list,
   className = "",
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  onBlur?: () => void;
+  maxLength?: number;
+  list?: string;
   className?: string;
 }) {
   return (
@@ -373,7 +422,10 @@ function TextField({
       <input
         type="text"
         value={value}
+        maxLength={maxLength}
+        list={list}
         onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
         className="mt-1 w-full min-w-20 rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-sm text-stone-800"
       />
     </label>

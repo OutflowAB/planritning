@@ -1,20 +1,28 @@
 "use client";
 
 import { jsPDF } from "jspdf";
-import { Canvas } from "fabric";
+import { Canvas, FabricText } from "fabric";
 
 import { renderDocumentToCanvas } from "@/lib/floorplan/fabric/sync";
 import { ApiError, apiFetch } from "@/lib/api-client";
 import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
 import type { FloorplanDocument } from "@/lib/floorplan/types";
+import { houseAddressLine, houseTextLayout, SM_INK, SM_NOT_TO_SCALE, SM_ROOM_LABEL_FONT } from "@/lib/sm-floorplan-layout";
 
 export type LibraryExportFormat = "svg" | "pdf" | "jpg" | "jpeg";
+
+/**
+ * What a finished scanned or blank plan prints besides the drawing: its address and floor, and
+ * that it is not to scale. Left out, nothing is printed (AI-redrawn sheets carry their own text).
+ */
+export type HouseText = { address?: string | null; floorLabel?: string | null };
 
 type ExportLibraryFloorplanInput = {
   imageId: number;
   imagePath: string;
   fileName: string;
   format: LibraryExportFormat;
+  houseText?: HouseText;
   fallbackUrl?: string | null;
 };
 
@@ -101,7 +109,7 @@ async function exportFromDocument(
   floorplanDocument: FloorplanDocument,
   input: ExportLibraryFloorplanInput,
 ) {
-  const canvas = await createDocumentRenderCanvas(floorplanDocument, input.imageId, input.imagePath);
+  const canvas = await createDocumentRenderCanvas(floorplanDocument, input.imageId, input.imagePath, input.houseText);
 
   try {
     await exportCanvasToFormat(canvas, input.format, input.fileName);
@@ -114,8 +122,9 @@ export async function renderFloorplanDocumentToPngDataUrl(
   floorplanDocument: FloorplanDocument,
   imageId: number,
   imagePath: string,
+  houseText?: HouseText,
 ) {
-  const canvas = await createDocumentRenderCanvas(floorplanDocument, imageId, imagePath);
+  const canvas = await createDocumentRenderCanvas(floorplanDocument, imageId, imagePath, houseText);
 
   try {
     return canvas.toDataURL({ format: "png", multiplier: 1 });
@@ -128,6 +137,7 @@ async function createDocumentRenderCanvas(
   floorplanDocument: FloorplanDocument,
   imageId: number,
   imagePath: string,
+  houseText?: HouseText,
 ) {
   const imageUrl = buildFloorplanImageUrl(imageId, imagePath);
   const canvasElement = window.document.createElement("canvas");
@@ -138,8 +148,29 @@ async function createDocumentRenderCanvas(
   });
 
   await renderDocumentToCanvas(canvas, floorplanDocument, imageUrl);
+  if (houseText) addHouseText(canvas, houseText);
   canvas.renderAll();
   return canvas;
+}
+
+/** "INTE SKALENLIG" bottom-left and the address with its floor bottom-right, inside the frame. */
+function addHouseText(canvas: Canvas, houseText: HouseText) {
+  const layout = houseTextLayout(canvas.getWidth(), canvas.getHeight());
+  const style = {
+    fontFamily: SM_ROOM_LABEL_FONT,
+    fontSize: layout.fontSize,
+    fill: SM_INK,
+    charSpacing: 60,
+    originY: "bottom" as const,
+    top: layout.baseline,
+    selectable: false,
+    evented: false,
+  };
+  canvas.add(new FabricText(SM_NOT_TO_SCALE, { ...style, originX: "left", left: layout.left }));
+  const addressLine = houseAddressLine(houseText.address, houseText.floorLabel);
+  if (addressLine) {
+    canvas.add(new FabricText(addressLine, { ...style, originX: "right", left: layout.right }));
+  }
 }
 
 async function exportFromImageUrl(

@@ -10,6 +10,30 @@ export const SM_ICON_STROKE = 2;
 export const SM_ROOM_LABEL_FONT = "Arial, Helvetica, sans-serif";
 export const SM_DIMENSION_FONT = "Arial, Helvetica, sans-serif";
 
+/** The note every finished scanned plan carries: the plans are drawn to look right, not to scale. */
+export const SM_NOT_TO_SCALE = "INTE SKALENLIG";
+
+/**
+ * Where the house text sits on a finished plan: "INTE SKALENLIG" bottom-left and the address
+ * with its floor bottom-right, both inside the outer frame. The frame is inset about 2 % of the
+ * canvas width on every plan the app makes (the brand layout scales with the drawing).
+ */
+export function houseTextLayout(canvasWidth: number, canvasHeight: number) {
+  const fontSize = Math.max(10, Math.round(canvasWidth * 0.009));
+  const frameInset = canvasWidth * 0.02;
+  const margin = fontSize * 1.2;
+  return {
+    fontSize,
+    left: frameInset + margin,
+    right: canvasWidth - frameInset - margin,
+    baseline: canvasHeight - frameInset - margin,
+  };
+}
+
+export function houseAddressLine(address?: string | null, floorLabel?: string | null) {
+  return [address?.trim().toUpperCase(), floorLabel?.trim().toUpperCase()].filter(Boolean).join(" · ");
+}
+
 export const SM_EDITOR = {
   background: SM_BEIGE,
   ink: SM_INK,

@@ -4,8 +4,9 @@ import dynamic from "next/dynamic";
 import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { apiFetch, describeError } from "@/lib/api-client";
 import { BLANK_FLOORPLAN_PREFIX } from "@/lib/floorplan/image-url";
-import { EditorToolbar } from "@/components/floorplan-editor/editor-toolbar";
+import { EditorToolbar, type PlanMeta } from "@/components/floorplan-editor/editor-toolbar";
 import { EditorTopBar } from "@/components/floorplan-editor/editor-top-bar";
 import { useFloorplanEditor } from "@/components/floorplan-editor/hooks/use-floorplan-editor";
 
@@ -29,6 +30,8 @@ type ApprovedImage = {
   file_path: string;
   preview_url: string;
   is_saved: boolean;
+  address?: string | null;
+  floor_label?: string | null;
 };
 
 type FloorplanEditorProps = {
@@ -68,6 +71,44 @@ export function FloorplanEditor({
   const hasScanMesh = scanMeshFor === approvedImage.id;
   const [showScanMesh, setShowScanMesh] = useState(false);
 
+  // Scanned and blank plans carry an address and floor, printed on the finished plan; the
+  // address is the image's name, as everywhere else in the app. AI-redrawn sheets have neither.
+  const hasPlanMeta = approvedImage.file_path.startsWith(BLANK_FLOORPLAN_PREFIX);
+  // The editor can mount with a placeholder while the plan loads; its address arrives later.
+  const metaFromPlan: PlanMeta = { address: approvedImage.address ?? "", floorLabel: approvedImage.floor_label ?? "" };
+  const metaKey = `${approvedImage.id}|${metaFromPlan.address}|${metaFromPlan.floorLabel}`;
+  const [planMeta, setPlanMeta] = useState(metaFromPlan);
+  const [savedMeta, setSavedMeta] = useState(metaFromPlan);
+  const [loadedMetaKey, setLoadedMetaKey] = useState(metaKey);
+  if (loadedMetaKey !== metaKey) {
+    setLoadedMetaKey(metaKey);
+    setPlanMeta(metaFromPlan);
+    setSavedMeta(metaFromPlan);
+  }
+
+  /** Saves the address and floor if they changed. */
+  const savePlanMeta = useCallback(async () => {
+    if (!hasPlanMeta || (savedMeta.address === planMeta.address && savedMeta.floorLabel === planMeta.floorLabel)) {
+      return;
+    }
+    try {
+      await apiFetch("/api/floorplan-meta", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageId: approvedImage.id, ...planMeta }),
+      });
+      setSavedMeta(planMeta);
+    } catch (error) {
+      setErrorMessage(describeError(error, "Kunde inte spara adressen.") ?? "");
+    }
+  }, [approvedImage.id, hasPlanMeta, planMeta, savedMeta]);
+
+  // Saved a moment after typing stops: clicking the drawing does not take focus from a field.
+  useEffect(() => {
+    const timer = window.setTimeout(() => void savePlanMeta(), 800);
+    return () => window.clearTimeout(timer);
+  }, [savePlanMeta]);
+
   // Only scans have a 3D mesh; the button shows once one is found.
   useEffect(() => {
     if (!approvedImage.file_path.startsWith(BLANK_FLOORPLAN_PREFIX)) return;
@@ -100,7 +141,10 @@ export function FloorplanEditor({
         return;
       }
 
-      await controller.publishFlattenedImage();
+      await savePlanMeta();
+      await controller.publishFlattenedImage(
+        hasPlanMeta ? { address: planMeta.address, floorLabel: planMeta.floorLabel } : undefined,
+      );
       await onSaveToLibrary();
     } catch (error) {
       setErrorMessage(
@@ -110,6 +154,7 @@ export function FloorplanEditor({
   }
 
   async function handleLeave() {
+    await savePlanMeta();
     const saved = await controller.saveDocument();
     if (saved) {
       await onLeaveWithoutSaving();
@@ -200,7 +245,13 @@ export function FloorplanEditor({
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col">
-        <EditorToolbar controller={controller} isLoading={isEditorLoading} />
+        <EditorToolbar
+          controller={controller}
+          isLoading={isEditorLoading}
+          planMeta={hasPlanMeta ? planMeta : undefined}
+          onPlanMetaChange={setPlanMeta}
+          onPlanMetaCommit={() => void savePlanMeta()}
+        />
         <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {isEditorLoading ? (
             <EditorCanvasLoading />

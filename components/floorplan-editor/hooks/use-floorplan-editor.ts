@@ -47,7 +47,7 @@ import { ApiError, apiFetch } from "@/lib/api-client";
 import { defaultObjectScale, SM_EDITOR } from "@/lib/sm-floorplan-layout";
 import { wallCentreLine, wallFromClicks } from "@/lib/floorplan/wall-placement";
 import { buildFloorplanImageUrl } from "@/lib/floorplan/image-url";
-import { renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-library";
+import { type HouseText, renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-library";
 import { publishFloorplanImage } from "@/lib/floorplan/publish-floorplan";
 import { imageDownloadBaseName } from "@/lib/image-naming";
 import { canvasPixels, setHandleScale } from "@/lib/floorplan/fabric/canva-controls";
@@ -809,7 +809,7 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
   // Only blank and scanned plans know their drawing area; an AI-redrawn image cannot turn.
   const canRotatePlan = Boolean(document?.drawingArea && document.objects.length > 0);
 
-  const publishFlattenedImage = useCallback(async () => {
+  const publishFlattenedImage = useCallback(async (houseText?: HouseText) => {
     const canvas = canvasRef.current;
     const currentDocument = documentRef.current;
     if (!canvas || !currentDocument || currentDocument.objects.length === 0) {
@@ -821,6 +821,7 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
       latestDocument,
       approvedImage.id,
       approvedImage.file_path,
+      houseText,
     );
 
     await publishFloorplanImage({

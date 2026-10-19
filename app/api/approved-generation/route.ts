@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { requireRole } from "@/lib/server-auth";
+
+import { readPlanMeta } from "@/lib/plan-meta";import { requireRole } from "@/lib/server-auth";
 import { imageUrl } from "@/lib/image-url";
 import { getAdminSupabase, normaliseEtag, serverConfigMissingResponse } from "@/lib/supabase-server";
 
@@ -71,8 +72,12 @@ export async function GET(request: Request) {
     .list(folder, { search: imageRow.file_path.slice(folder.length + 1), limit: 1 });
   const version = normaliseEtag((listed?.[0]?.metadata as { eTag?: unknown } | null)?.eTag);
 
+  const meta = (await readPlanMeta(adminSupabase, [imageRow.id])).get(imageRow.id);
+
   return NextResponse.json({
     image: {
+      address: meta?.address ?? null,
+      floor_label: meta?.floorLabel ?? null,
       id: imageRow.id,
       file_name: imageRow.file_name,
       file_path: imageRow.file_path,

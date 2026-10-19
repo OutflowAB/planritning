@@ -25,6 +25,8 @@ type ApprovedImageRow = {
   created_at: string;
   preview_url: string;
   is_saved: boolean;
+  address?: string | null;
+  floor_label?: string | null;
 };
 
 /**

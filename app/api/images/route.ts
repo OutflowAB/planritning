@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 import { draftVersion } from "@/lib/floorplan/preview";
+import { readPlanMeta } from "@/lib/plan-meta";
 import { requireRole } from "@/lib/server-auth";
 import {
   BLANK_FLOORPLAN_PREFIX,
@@ -28,31 +29,9 @@ export type ImageListItem = UploadedImageRow & {
   version: string | null;
   /** The name someone gave it, usually an address. Null when unnamed or not yet migrated. */
   label: string | null;
+  /** The floor of a scanned plan ("ENTRÉPLAN"). Null when not set or not yet migrated. */
+  floor_label: string | null;
 };
-
-/**
- * Names for the given rows, read separately and best-effort: the column arrives with
- * database/2026-10-15-uploaded-images-label.sql, and a list must not fail before it has run.
- */
-async function readLabels(
-  supabase: NonNullable<ReturnType<typeof getAdminSupabase>>,
-  ids: number[],
-): Promise<Map<number, string>> {
-  const labels = new Map<number, string>();
-  if (ids.length === 0) {
-    return labels;
-  }
-  const { data, error } = await supabase.from(UPLOADS_TABLE).select("id, label").in("id", ids);
-  if (error || !data) {
-    return labels;
-  }
-  for (const row of data as { id: number; label: string | null }[]) {
-    if (row.label) {
-      labels.set(row.id, row.label);
-    }
-  }
-  return labels;
-}
 
 /** When each blank or scanned plan among `rows` was last saved, by id. */
 async function draftSaves(supabase: SupabaseClient, rows: UploadedImageRow[]): Promise<Map<number, string>> {
@@ -119,11 +98,12 @@ export async function GET(request: Request) {
       .from(BUCKET_NAME)
       .list(folder, { search: typed.file_path.slice(folder.length + 1), limit: 1 });
     const version = normaliseEtag((listed?.[0]?.metadata as { eTag?: unknown } | null)?.eTag);
-    const labels = await readLabels(supabase, [typed.id]);
+    const meta = (await readPlanMeta(supabase, [typed.id])).get(typed.id);
     const item: ImageListItem = {
       ...typed,
       version: versionOf(typed, version, await draftSaves(supabase, [typed])),
-      label: labels.get(typed.id) ?? null,
+      label: meta?.address ?? null,
+      floor_label: meta?.floorLabel ?? null,
     };
     return NextResponse.json({ item }, { headers: { "Cache-Control": "no-store" } });
   }
@@ -186,7 +166,7 @@ export async function GET(request: Request) {
   }
 
   const rows = (rowsResult.data ?? []) as unknown as UploadedImageRow[];
-  const labels = await readLabels(
+  const metas = await readPlanMeta(
     supabase,
     rows.map((row) => row.id),
   );
@@ -194,7 +174,8 @@ export async function GET(request: Request) {
   const items: ImageListItem[] = rows.map((row) => ({
     ...row,
     version: versionOf(row, versions.get(row.file_path) ?? null, saves),
-    label: labels.get(row.id) ?? null,
+    label: metas.get(row.id)?.address ?? null,
+    floor_label: metas.get(row.id)?.floorLabel ?? null,
   }));
 
   return NextResponse.json({ items }, { headers: { "Cache-Control": "no-store" } });
