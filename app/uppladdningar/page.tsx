@@ -18,6 +18,7 @@ import { apiFetch, apiJson, describeError } from "@/lib/api-client";
 import { imageUrl } from "@/lib/image-url";
 import { prefetchImage } from "@/lib/prefetch-image";
 import { dispatchGenerationUpdated, LIBRARY_UPDATED_EVENT, subscribeToAppEvent } from "@/lib/app-events";
+import { uploadImages } from "@/lib/upload-images";
 import { useCachedList } from "@/lib/use-cached-list";
 import type { ImageListItem } from "@/app/api/images/route";
 import {
@@ -89,6 +90,7 @@ export default function UppladdningarPage() {
   const canDelete = isAuthenticated();
   const converterPath = pathname.startsWith("/admin") ? "/admin/dashboard" : "/startsida";
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const [isDragActive, setIsDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const {
@@ -394,50 +396,50 @@ export default function UppladdningarPage() {
     });
   }, [uploads]);
 
-  async function uploadFile(file: File) {
-    if (isUploading) {
+  /** Uploads one or several images, three at a time; each succeeds or fails on its own. */
+  async function uploadFiles(files: File[]) {
+    if (isUploading || files.length === 0) {
       return;
     }
 
     setIsUploading(true);
+    setUploadProgress(files.length > 1 ? { done: 0, total: files.length } : null);
 
     try {
-      const payload = new FormData();
-      payload.append("file", file);
-      await apiFetch("/api/upload", { method: "POST", body: payload });
+      const outcomes = await uploadImages(files, (done, total) => setUploadProgress({ done, total }));
+      const uploaded = outcomes.filter((outcome) => outcome.ok).length;
+      const failed = outcomes.filter((outcome) => !outcome.ok);
 
-      showToast("Bilden laddades upp.");
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
+      if (uploaded > 0) {
+        showToast(uploaded === 1 ? "Bilden laddades upp." : `${uploaded} bilder laddades upp.`);
+        reloadUploads();
       }
-      reloadUploads();
-    } catch (error) {
-      const message = describeError(error, "Ett oväntat fel uppstod under uppladdning.");
-      if (message) {
-        showToast(message, "error");
+      if (failed.length > 0) {
+        const first = failed[0];
+        showToast(
+          failed.length === 1 && "message" in first
+            ? `${first.file.name}: ${first.message}`
+            : `${failed.length} filer kunde inte laddas upp.`,
+          "error",
+        );
       }
     } finally {
       setIsUploading(false);
+      setUploadProgress(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
-  }
-
-  function assignUploadFile(file: File | null) {
-    if (!file || !file.type.startsWith("image/")) {
-      showToast("Välj en bildfil (PNG, JPG eller WEBP).", "error");
-      return;
-    }
-
-    void uploadFile(file);
   }
 
   function handleFileInputChange(event: ChangeEvent<HTMLInputElement>) {
-    assignUploadFile(event.target.files?.[0] ?? null);
+    void uploadFiles(Array.from(event.target.files ?? []));
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setIsDragActive(false);
-    assignUploadFile(event.dataTransfer.files?.[0] ?? null);
+    void uploadFiles(Array.from(event.dataTransfer.files ?? []));
   }
 
   function handleDragOver(event: DragEvent<HTMLDivElement>) {
@@ -475,7 +477,8 @@ export default function UppladdningarPage() {
           ref={fileInputRef}
           id="image-file"
           type="file"
-          accept="image/*"
+          multiple
+          accept="image/png,image/jpeg,image/webp"
           onChange={handleFileInputChange}
           disabled={isUploading}
           className="sr-only"
@@ -545,7 +548,7 @@ export default function UppladdningarPage() {
                   ) : (
                     <Upload size={15} aria-hidden="true" />
                   )}
-                  {isUploading ? "Laddar upp..." : "Ladda upp"}
+                  {isUploading ? (uploadProgress ? `Laddar upp ${uploadProgress.done} av ${uploadProgress.total}...` : "Laddar upp...") : "Ladda upp"}
                 </label>
               ) : null}
             </>
