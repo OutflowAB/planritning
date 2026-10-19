@@ -102,8 +102,18 @@ export async function GET(request: Request) {
     return NextResponse.json({ message: "Inget sparat dokument hittades." }, { status: 404 });
   }
 
+  // The plan as first imported (a scan), read separately and best-effort: the column arrives
+  // with database/2026-10-19-lidar-scans.sql, and loading must not fail before it has run.
+  const { data: sourceRow } = await adminSupabase
+    .from(DOCUMENTS_TABLE)
+    .select("source_document")
+    .eq("image_id", imageId)
+    .eq("file_path", filePath)
+    .maybeSingle();
+
   return NextResponse.json({
     document: row.document as FloorplanDocument,
+    sourceDocument: (sourceRow?.source_document as FloorplanDocument | null | undefined) ?? null,
     updatedAt: row.updated_at,
   });
 }

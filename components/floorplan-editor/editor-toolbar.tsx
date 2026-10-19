@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import type { FloorplanEditorController } from "@/components/floorplan-editor/hooks/use-floorplan-editor";
+import { formatMeters, formatSquareMeters, lineLengthInMeters, totalRoomArea } from "@/lib/floorplan/measure";
 import { FLOORPLAN_FURNITURE, FLOORPLAN_SYMBOLS } from "@/lib/floorplan/symbol-library";
 import type { EditorTool } from "@/lib/floorplan/types";
 
@@ -50,6 +51,8 @@ export function EditorToolbar({ controller, isLoading = false }: EditorToolbarPr
   const showDimensionMode = controller.activeTool === "dimension";
   const expandedLibraryView = showSymbolLibrary || showFurnitureLibrary;
   const selected = controller.selectedObject;
+  // Only scanned plans know their rooms' areas.
+  const totalArea = controller.document ? totalRoomArea(controller.document) : null;
 
   const subViewTitle = showFurnitureLibrary
     ? "Möbler"
@@ -61,7 +64,7 @@ export function EditorToolbar({ controller, isLoading = false }: EditorToolbarPr
 
   return (
     <aside
-      className={`flex shrink-0 border-b border-[#e8e2d8] bg-[#f7f4ef] px-2 ${
+      className={`flex shrink-0 border-b border-stone-100 bg-stone-50 px-2 ${
         expandedLibraryView ? "h-40" : "h-28"
       } ${subViewTitle ? "flex-col py-2" : "items-center"} ${isLoading ? "pointer-events-none opacity-60" : ""}`}
       aria-busy={isLoading}
@@ -69,18 +72,18 @@ export function EditorToolbar({ controller, isLoading = false }: EditorToolbarPr
       <div className={`min-h-0 w-full ${subViewTitle ? "flex flex-1 flex-col" : "flex items-center gap-2 overflow-y-auto"}`}>
         {subViewTitle ? (
           <>
-            <p className="shrink-0 text-center text-xs font-semibold text-[#4d463f]">{subViewTitle}</p>
+            <p className="shrink-0 text-center text-xs font-semibold text-stone-800">{subViewTitle}</p>
             <div className="relative flex flex-1 items-center justify-center">
               <button
                 type="button"
                 onClick={() => controller.setActiveTool("select")}
-                className="absolute left-0 inline-flex shrink-0 flex-col items-center gap-1 rounded-none px-2 py-2 text-[10px] font-semibold text-[#4d463f] transition hover:bg-[#ece7df]"
+                className="absolute left-0 inline-flex shrink-0 flex-col items-center gap-1 rounded-lg px-2 py-2 text-[10px] font-semibold text-stone-800 transition hover:bg-stone-100"
               >
                 <ArrowLeft size={18} />
                 <span>Tillbaka</span>
               </button>
               {showDimensionMode ? (
-                <p className="text-xs text-[#6a6258]">Klicka start och slut på planritningen</p>
+                <p className="text-xs text-stone-600">Klicka start och slut på planritningen</p>
               ) : null}
               {showSymbolLibrary ? (
                 <LibraryPickerRow
@@ -125,12 +128,12 @@ export function EditorToolbar({ controller, isLoading = false }: EditorToolbarPr
                           : tool.label
                     }
                     onClick={() => controller.setActiveTool(tool.id)}
-                    className={`inline-flex flex-col items-center gap-1 rounded-none px-2 py-2 text-[10px] font-semibold transition ${
+                    className={`inline-flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-[10px] font-semibold transition ${
                       isDisabled
                         ? "cursor-not-allowed opacity-40"
                         : isActive
-                          ? "bg-[#5c544a] text-white"
-                          : "text-[#4d463f] hover:bg-[#ece7df]"
+                          ? "bg-primary text-white"
+                          : "text-stone-800 hover:bg-stone-100"
                     }`}
                   >
                     {tool.icon}
@@ -140,16 +143,23 @@ export function EditorToolbar({ controller, isLoading = false }: EditorToolbarPr
               })}
             </div>
             {selected ? (
-              <div className="ml-2 flex min-w-0 flex-1 items-end gap-3 border-l border-[#e8e2d8] pl-3">
+              <div className="ml-2 flex min-w-0 flex-1 items-end gap-3 border-l border-stone-100 pl-3">
                 <SelectedObjectFields selected={selected} controller={controller} />
                 <button
                   type="button"
                   onClick={() => controller.deleteSelected()}
-                  className="inline-flex shrink-0 flex-col items-center gap-1 rounded-none px-2 py-2 text-[10px] font-semibold text-[#4d463f] transition hover:bg-[#ece7df]"
+                  className="inline-flex shrink-0 flex-col items-center gap-1 rounded-lg px-2 py-2 text-[10px] font-semibold text-stone-800 transition hover:bg-stone-100"
                 >
                   <Trash2 size={18} />
                   <span>Radera</span>
                 </button>
+              </div>
+            ) : totalArea ? (
+              <div className="ml-2 flex min-w-0 flex-1 items-end gap-3 border-l border-stone-100 pl-3">
+                <ReadOnlyField
+                  label={`Total yta (${totalArea.rooms} rum)`}
+                  value={`ca ${formatSquareMeters(totalArea.squareMeters)}`}
+                />
               </div>
             ) : null}
           </div>
@@ -166,6 +176,24 @@ function SelectedObjectFields({
   selected: NonNullable<FloorplanEditorController["selectedObject"]>;
   controller: FloorplanEditorController;
 }) {
+  const scale = controller.document?.scale;
+  // On a scanned plan widths are edited in metres; without a scale, in pixels as before.
+  const widthField = (width: number) =>
+    scale ? (
+      <NumberField
+        label="Bredd (m)"
+        value={Math.round((width / scale.pxPerMeter) * 100) / 100}
+        step={0.05}
+        onChange={(value) => controller.updateSelectedObject({ width: value * scale.pxPerMeter })}
+      />
+    ) : (
+      <NumberField
+        label="Bredd"
+        value={width}
+        onChange={(value) => controller.updateSelectedObject({ width: value })}
+      />
+    );
+
   const fields = (() => {
     switch (selected.type) {
       case "roomLabel":
@@ -182,6 +210,9 @@ function SelectedObjectFields({
               value={selected.fontSize}
               onChange={(value) => controller.updateSelectedObject({ fontSize: value })}
             />
+            {selected.areaM2 !== undefined ? (
+              <ReadOnlyField label="Yta" value={`ca ${formatSquareMeters(selected.areaM2)}`} />
+            ) : null}
           </>
         );
       case "dimension":
@@ -196,11 +227,7 @@ function SelectedObjectFields({
       case "door":
         return (
           <>
-            <NumberField
-              label="Bredd"
-              value={selected.width}
-              onChange={(value) => controller.updateSelectedObject({ width: value })}
-            />
+            {widthField(selected.width)}
             <SelectField
               label="Öppningsriktning"
               value={selected.swing}
@@ -219,11 +246,7 @@ function SelectedObjectFields({
       case "window":
         return (
           <>
-            <NumberField
-              label="Bredd"
-              value={selected.width}
-              onChange={(value) => controller.updateSelectedObject({ width: value })}
-            />
+            {widthField(selected.width)}
             <NumberField
               label="Höjd"
               value={selected.height}
@@ -233,11 +256,16 @@ function SelectedObjectFields({
         );
       case "wall":
         return (
-          <NumberField
-            label="Linjebredd"
-            value={selected.strokeWidth}
-            onChange={(value) => controller.updateSelectedObject({ strokeWidth: value })}
-          />
+          <>
+            <NumberField
+              label="Linjebredd"
+              value={selected.strokeWidth}
+              onChange={(value) => controller.updateSelectedObject({ strokeWidth: value })}
+            />
+            {scale ? (
+              <ReadOnlyField label="Längd" value={formatMeters(lineLengthInMeters(scale, selected))} />
+            ) : null}
+          </>
         );
       default:
         return null;
@@ -249,6 +277,15 @@ function SelectedObjectFields({
   }
 
   return <div className="flex min-w-0 flex-1 flex-wrap items-end gap-3">{fields}</div>;
+}
+
+function ReadOnlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="block shrink-0 text-xs font-semibold text-stone-800">
+      {label}
+      <p className="mt-1 py-1.5 text-sm font-normal text-stone-600">{value}</p>
+    </div>
+  );
 }
 
 function NumberField({
@@ -263,14 +300,14 @@ function NumberField({
   step?: number;
 }) {
   return (
-    <label className="block shrink-0 text-xs font-semibold text-[#4d463f]">
+    <label className="block shrink-0 text-xs font-semibold text-stone-800">
       {label}
       <input
         type="number"
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
-        className="mt-1 w-20 rounded-none border border-[#d8d2c8] bg-white px-2 py-1.5 text-sm text-[#4d463f]"
+        className="mt-1 w-20 rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-sm text-stone-800"
       />
     </label>
   );
@@ -288,13 +325,13 @@ function TextField({
   className?: string;
 }) {
   return (
-    <label className={`block shrink-0 text-xs font-semibold text-[#4d463f] ${className}`}>
+    <label className={`block shrink-0 text-xs font-semibold text-stone-800 ${className}`}>
       {label}
       <input
         type="text"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 w-full min-w-20 rounded-none border border-[#d8d2c8] bg-white px-2 py-1.5 text-sm text-[#4d463f]"
+        className="mt-1 w-full min-w-20 rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-sm text-stone-800"
       />
     </label>
   );
@@ -312,12 +349,12 @@ function SelectField({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="block shrink-0 text-xs font-semibold text-[#4d463f]">
+    <label className="block shrink-0 text-xs font-semibold text-stone-800">
       {label}
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 rounded-none border border-[#d8d2c8] bg-white px-2 py-1.5 text-sm text-[#4d463f]"
+        className="mt-1 rounded-lg border border-stone-200 bg-white px-2 py-1.5 text-sm text-stone-800"
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>
@@ -362,10 +399,10 @@ function LibraryPickerButton({
     <button
       type="button"
       onClick={onSelect}
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-none border px-2 py-1.5 text-xs transition ${
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1.5 text-xs transition ${
         selected
-          ? "border-[#5c544a] bg-[#5c544a] text-white"
-          : "border-[#d8d2c8] bg-white text-[#4d463f] hover:bg-[#f2ede5]"
+          ? "border-primary bg-primary text-white"
+          : "border-stone-200 bg-white text-stone-800 hover:bg-stone-100"
       }`}
     >
       <FloorplanPathIcon paths={paths} className="h-5 w-5 shrink-0" />

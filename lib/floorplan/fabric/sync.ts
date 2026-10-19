@@ -282,6 +282,11 @@ export function createFabricObjectFromFloorplan(object: FloorplanObject): Fabric
     case "wall":
       return new Line([object.x, object.y, object.x2, object.y2], {
         ...common,
+        // A line is placed by its bounding box, which starts at its smallest x and y — not at its
+        // first point, which is only the same thing for a line drawn down and to the right.
+        // Scanned walls run every way.
+        left: Math.min(object.x, object.x2),
+        top: Math.min(object.y, object.y2),
         stroke: SM_INK,
         strokeWidth: object.strokeWidth,
         strokeLineCap: "square",
@@ -513,19 +518,29 @@ export function floorplanObjectFromFabric(object: FabricObject): FloorplanObject
       if (!(object instanceof Line)) {
         return null;
       }
+      // The ends relative to the bounding box's corner, whichever way the line runs.
       const coords = object.calcLinePoints();
+      const left = object.left ?? 0;
+      const top = object.top ?? 0;
+      const minX = Math.min(coords.x1, coords.x2);
+      const minY = Math.min(coords.y1, coords.y2);
+      const stored = object.get(FLOORPLAN_DATA_KEY) as FloorplanObject | undefined;
       return {
         ...base,
         type: "wall",
-        x2: (object.left ?? 0) + (coords.x2 - coords.x1),
-        y2: (object.top ?? 0) + (coords.y2 - coords.y1),
+        x: left + (coords.x1 - minX),
+        y: top + (coords.y1 - minY),
+        x2: left + (coords.x2 - minX),
+        y2: top + (coords.y2 - minY),
         strokeWidth: object.strokeWidth ?? SM_EDITOR.wallStroke,
+        ...(stored?.type === "wall" && stored.wallId ? { wallId: stored.wallId } : {}),
       };
     }
     case "roomLabel": {
       if (!(object instanceof FabricText)) {
         return null;
       }
+      const stored = object.get(FLOORPLAN_DATA_KEY) as FloorplanObject | undefined;
       return {
         ...base,
         type: "roomLabel",
@@ -534,6 +549,8 @@ export function floorplanObjectFromFabric(object: FabricObject): FloorplanObject
         fontFamily: object.fontFamily ?? SM_EDITOR.roomLabelFontFamily,
         fill: typeof object.fill === "string" ? object.fill : SM_INK,
         textAlign: (object.textAlign as "left" | "center" | "right") ?? "center",
+        // The room's scanned area is not on the canvas; it comes from the stored object.
+        ...(stored?.type === "roomLabel" && stored.areaM2 !== undefined ? { areaM2: stored.areaM2 } : {}),
       };
     }
     case "dimension":
@@ -555,8 +572,10 @@ export function floorplanObjectFromFabric(object: FabricObject): FloorplanObject
         ...windowObject,
         ...base,
         type: "window",
-        width: Math.max(Math.round(object.getScaledWidth()), 1),
-        height: Math.max(Math.round(object.getScaledHeight()), 1),
+        // The stored size times any resize on the canvas: measuring the drawn group instead
+        // lost a pixel to its frame and rounding on every save.
+        width: Math.max(windowObject.width * (object.scaleX ?? 1), 1),
+        height: Math.max((windowObject.height ?? 14) * (object.scaleY ?? 1), 1),
         scaleX: 1,
         scaleY: 1,
       };
@@ -589,6 +608,37 @@ function readExtendedObject(object: FabricObject, base: PartialBase): FloorplanO
     ...base,
     type: stored.type,
   } as FloorplanObject;
+}
+
+/**
+ * Dragging one piece of a scanned wall drags the wall's other pieces and its doors and windows
+ * by the same amount. Only plain moves count; rotating or stretching a piece moves nothing else.
+ */
+export function moveAttachedObjects(
+  canvas: Canvas,
+  target: FabricObject | undefined,
+  action: string | undefined,
+  originalPosition: { left: number; top: number } | undefined,
+) {
+  const stored = target?.get(FLOORPLAN_DATA_KEY) as FloorplanObject | undefined;
+  if (!target || action !== "drag" || !originalPosition || stored?.type !== "wall" || !stored.wallId) {
+    return;
+  }
+
+  const dx = (target.left ?? 0) - originalPosition.left;
+  const dy = (target.top ?? 0) - originalPosition.top;
+  if (dx === 0 && dy === 0) {
+    return;
+  }
+
+  for (const other of canvas.getObjects()) {
+    const data = other.get(FLOORPLAN_DATA_KEY) as FloorplanObject | undefined;
+    if (other === target || !data || !("wallId" in data) || data.wallId !== stored.wallId) {
+      continue;
+    }
+    other.set({ left: (other.left ?? 0) + dx, top: (other.top ?? 0) + dy });
+    other.setCoords();
+  }
 }
 
 export function attachExtendedData(object: FabricObject, source: FloorplanObject) {
@@ -666,17 +716,21 @@ export function duplicateFabricObject(object: FabricObject): FabricObject | null
     return null;
   }
 
+  // A copy is its own object, not another piece of the scanned wall it came from.
+  const { wallId: _wallId, ...unattached } = stored as FloorplanObject & { wallId?: string };
+  void _wallId;
+  const copy = unattached as FloorplanObject;
   const clone = createFabricObjectFromFloorplan({
-    ...stored,
+    ...copy,
     id: crypto.randomUUID(),
-    x: stored.x + 16,
-    y: stored.y + 16,
+    x: copy.x + 16,
+    y: copy.y + 16,
   });
   attachExtendedData(clone, {
-    ...stored,
+    ...copy,
     id: (clone.get("data") as FloorplanFabricMeta).floorplanId,
-    x: stored.x + 16,
-    y: stored.y + 16,
+    x: copy.x + 16,
+    y: copy.y + 16,
   });
   return clone;
 }

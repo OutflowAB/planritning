@@ -1,14 +1,96 @@
 @import "tailwindcss";
 
+/*
+ * Design tokens. Neutrals are Tailwind's warm stone scale, used directly in markup
+ * (stone-50 … stone-950). What lives here is what a theme changes: the page canvas, the
+ * primary action colour, the sidebar, and the customer's accent, which the root layout sets
+ * per tenant from lib/brand.ts. Themes are chosen with `data-theme` on <html> (lib/themes.ts).
+ */
 :root {
-  --background: #f1f5f9;
-  --foreground: #0f172a;
+  --background: #fafaf9;
+  --foreground: #1c1917;
+  --tenant-accent: #8b7355;
+
+  --primary: #1c1917;
+  --primary-hover: #292524;
+  --primary-fg: #ffffff;
+
+  --sidebar: #fafaf9;
+  --sidebar-fg: #57534e;
+  --sidebar-strong: #1c1917;
+  --sidebar-muted: #a8a29e;
+  --sidebar-active: #ffffff;
+  --sidebar-hover: #f5f5f4;
+  --sidebar-border: rgba(214, 211, 209, 0.7);
+  --sidebar-card: #ffffff;
+  --sidebar-icon: var(--tenant-accent);
+}
+
+/* The customer's colour carries the app: a deep tone of it in the sidebar, it on buttons. */
+[data-theme="kund"] {
+  --background: #f8f5f1;
+  --primary: #6b5640;
+  --primary-hover: #5b4836;
+  --sidebar: #2a221b;
+  --sidebar-fg: rgba(244, 236, 227, 0.72);
+  --sidebar-strong: #ffffff;
+  --sidebar-muted: rgba(244, 236, 227, 0.42);
+  --sidebar-active: rgba(255, 255, 255, 0.1);
+  --sidebar-hover: rgba(255, 255, 255, 0.06);
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-card: rgba(255, 255, 255, 0.06);
+  --sidebar-icon: #e8d5bf;
+}
+
+[data-theme="skog"] {
+  --background: #f6f8f6;
+  --primary: #1f5141;
+  --primary-hover: #194337;
+  --sidebar: #142b25;
+  --sidebar-fg: rgba(225, 240, 233, 0.72);
+  --sidebar-strong: #ffffff;
+  --sidebar-muted: rgba(225, 240, 233, 0.42);
+  --sidebar-active: rgba(255, 255, 255, 0.1);
+  --sidebar-hover: rgba(255, 255, 255, 0.06);
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-card: rgba(255, 255, 255, 0.06);
+  --sidebar-icon: #9fd8bf;
+}
+
+[data-theme="marin"] {
+  --background: #f6f7fb;
+  --primary: #24397a;
+  --primary-hover: #1d2f66;
+  --sidebar: #111832;
+  --sidebar-fg: rgba(226, 231, 250, 0.72);
+  --sidebar-strong: #ffffff;
+  --sidebar-muted: rgba(226, 231, 250, 0.42);
+  --sidebar-active: rgba(255, 255, 255, 0.1);
+  --sidebar-hover: rgba(255, 255, 255, 0.06);
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-card: rgba(255, 255, 255, 0.06);
+  --sidebar-icon: #a9b9ff;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-inter);
+  --color-canvas: var(--background);
+  --color-accent: var(--tenant-accent);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-fg: var(--primary-fg);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-fg: var(--sidebar-fg);
+  --color-sidebar-strong: var(--sidebar-strong);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-hover: var(--sidebar-hover);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-card: var(--sidebar-card);
+  --color-sidebar-icon: var(--sidebar-icon);
+  --font-sans: var(--font-geist), system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
   --font-mono: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono",
     "Courier New", monospace;
 }
@@ -16,6 +98,14 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-inter), system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
+}
+
+:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--tenant-accent) 70%, transparent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--tenant-accent) 22%, transparent);
 }

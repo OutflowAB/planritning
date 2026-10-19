@@ -28,7 +28,7 @@ import {
   preventImageContextMenu,
   WatermarkOverlay,
 } from "@/components/dashboard/watermark-overlay";
-import { FloorplanDrawingAnimation } from "@/components/dashboard/floorplan-drawing-animation";
+import { ProcessingView } from "@/components/dashboard/processing/processing-view";
 import { useToast } from "@/components/ui/toast-provider";
 import {
   readConvertStream,
@@ -67,6 +67,9 @@ import { newFloorRun, parseFloorGroup } from "@/lib/floor-groups";
 import { defaultCompass, type CompassSettings } from "@/lib/image/compass-settings";
 import { dispatchGenerationUpdated } from "@/lib/app-events";
 import { imageUrl } from "@/lib/image-url";
+import { buttonClass } from "@/components/ui/button";
+import { InfoTip } from "@/components/ui/info-tip";
+import { normaliseImageLabel, saveImageLabel, IMAGE_LABEL_MAX_LENGTH } from "@/lib/image-label";
 import type { ImageListItem } from "@/app/api/images/route";
 import {
   buildPlanritningarHref,
@@ -87,62 +90,31 @@ type ConverterTransferPayload = {
   uploadId?: number;
 };
 
-type ProcessingViewProps = {
-  statusMessage?: string | null;
-};
+/** Common reasons to send a drawing back, one tap each; they are added to the comment. */
+const REJECT_SUGGESTIONS = [
+  "En vägg saknas",
+  "En dörr är fel placerad",
+  "Fönster saknas",
+  "Rummen har fel proportioner",
+  "Ritningen är beskuren",
+];
 
-function ProcessingView({ statusMessage }: ProcessingViewProps) {
-  const [elapsedMs, setElapsedMs] = useState(0);
-
-  useEffect(() => {
-    const startedAt = Date.now();
-    const intervalId = window.setInterval(() => {
-      setElapsedMs(Date.now() - startedAt);
-    }, 200);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
-  const elapsedSeconds = Math.floor(elapsedMs / 1000);
-
-  return (
-    <div
-      aria-live="polite"
-      aria-busy="true"
-      className="relative flex min-h-[440px] flex-col items-center justify-center gap-7 overflow-hidden bg-[#f7f4ef] px-4 py-10 sm:px-6 sm:py-12"
-    >
-      <style>{`
-        @keyframes sm-proc-glow {
-          0%, 100% { opacity: 0.35; transform: scale(0.95); }
-          50%      { opacity: 0.7;  transform: scale(1.05); }
-        }
-        .sm-proc-glow { animation: sm-proc-glow 4s ease-in-out infinite; }
-        @media (prefers-reduced-motion: reduce) {
-          .sm-proc-glow { animation: none; }
-        }
-      `}</style>
-
-      {/* Mjuk glöd bakom ritningen */}
-      <div
-        className="sm-proc-glow pointer-events-none absolute h-[340px] w-[340px] rounded-full bg-[#e1d5c9] blur-3xl"
-        aria-hidden="true"
-      />
-
-      <div className="relative">
-        <FloorplanDrawingAnimation />
-      </div>
-
-      <div className="relative space-y-2 text-center">
-        <p className="text-xl font-semibold tracking-tight text-[#3d3a36]">Konverterar bild</p>
-        <p className="text-sm text-[#7b746a]">
-          {statusMessage ? `${statusMessage} · ` : ""}
-          {elapsedSeconds} s
-        </p>
-      </div>
-    </div>
-  );
+/**
+ * Where the drawing sits on the sheet under review, as fractions, for the compare slider to
+ * line the original up within. Read from the stored review, which holds the sheet's layout.
+ */
+function compareAlignRegion(resultImageId: number | null) {
+  const review = resultImageId ? getPendingGenerationReview() : null;
+  const layout = review?.resultImageId === resultImageId ? review.layout : undefined;
+  if (!layout || layout.canvasWidth <= 0 || layout.canvasHeight <= 0) {
+    return null;
+  }
+  return {
+    x: layout.imageX / layout.canvasWidth,
+    y: layout.imageY / layout.canvasHeight,
+    width: layout.imageWidth / layout.canvasWidth,
+    height: layout.imageHeight / layout.canvasHeight,
+  };
 }
 
 function revokeIfObjectUrl(url: string | null) {
@@ -499,12 +471,12 @@ function readCachedSourcePreviewState() {
 function ConverterLoadingShell() {
   return (
     <div
-      className="mx-auto w-full max-w-3xl space-y-4 rounded-none border border-[#d8d2c8] bg-white p-5 text-left text-[#4d463f] shadow-sm"
+      className="w-full space-y-5 rounded-2xl border border-stone-200 bg-white p-4 text-left text-stone-800 shadow-[0_1px_2px_rgba(28,25,23,0.04),0_16px_40px_-24px_rgba(28,25,23,0.16)] sm:p-6"
       aria-busy="true"
       aria-live="polite"
     >
       <div className="flex min-h-[420px] items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-[#5c544a]" aria-hidden="true" />
+        <Loader2 className="h-8 w-8 animate-spin text-stone-700" aria-hidden="true" />
       </div>
     </div>
   );
@@ -513,12 +485,12 @@ function ConverterLoadingShell() {
 function ComparePreviewSkeleton({ showWatermark = false }: { showWatermark?: boolean }) {
   return (
     <div
-      className="flex min-h-[420px] w-full items-center justify-center bg-[#f0ece6] px-6 py-8"
+      className="flex min-h-[420px] w-full items-center justify-center bg-stone-100 px-6 py-8"
       aria-busy="true"
       aria-live="polite"
       aria-label="Jämförelsebilden laddas"
     >
-      <div className="relative h-[min(60vh,640px)] w-full max-w-2xl animate-pulse rounded-none bg-[#e0dbd3]">
+      <div className="relative h-[min(60vh,640px)] w-full max-w-2xl animate-pulse rounded-lg bg-stone-200">
         {showWatermark ? <WatermarkOverlay /> : null}
       </div>
     </div>
@@ -571,6 +543,9 @@ export function FloorplanEnhancer() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [processingStatusMessage, setProcessingStatusMessage] = useState<string | null>(null);
+  // The address or name the plan is filed under. Kept for the whole session, so a redraw of a
+  // rejected version is filed under the same name.
+  const [propertyLabel, setPropertyLabel] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [resultImageId, setResultImageId] = useState<number | null>(
     () => cachedReviewPreview.resultImageId,
@@ -1099,6 +1074,20 @@ export function FloorplanEnhancer() {
     setIsDragActive(false);
   }
 
+  /** Files a finished conversion, and the original it came from, under the chosen name. */
+  function labelConversion(conversion: ConvertDoneEvent) {
+    const label = normaliseImageLabel(propertyLabel);
+    if (!label) {
+      return;
+    }
+    const ids = [conversion.savedImageId, conversion.sourceImageId].filter((id) => id > 0);
+    void saveImageLabel(ids, label).then((saved) => {
+      if (!saved) {
+        console.warn("Plan name not saved", { ids, label });
+      }
+    });
+  }
+
   async function processImage(file?: File, feedback?: string) {
     if (isSubmitting) {
       return;
@@ -1144,6 +1133,7 @@ export function FloorplanEnhancer() {
       const conversion = await readConvertStream(response, {
         onStatus: (event) => setProcessingStatusMessage(event.message),
       });
+      labelConversion(conversion);
 
       applyConversionResult(conversion, sourcePreviewUrl ?? undefined);
     } catch (error) {
@@ -1405,11 +1395,11 @@ export function FloorplanEnhancer() {
             },
           }),
         });
-        results.push(
-          await readConvertStream(response, {
-            onStatus: (event) => setProcessingStatusMessage(`${labels[index]}: ${event.message}`),
-          }),
-        );
+        const conversion = await readConvertStream(response, {
+          onStatus: (event) => setProcessingStatusMessage(`${labels[index]}: ${event.message}`),
+        });
+        labelConversion(conversion);
+        results.push(conversion);
         setMultiRun({ labels, done: index + 1 });
       }
     } catch (error) {
@@ -1511,6 +1501,7 @@ export function FloorplanEnhancer() {
       const conversion = await readConvertStream(response, {
         onStatus: (event) => setProcessingStatusMessage(event.message),
       });
+      labelConversion(conversion);
 
       if (redoIndex !== null) {
         setFloors((previous) => replaceFloor(previous, redoIndex, conversion));
@@ -1808,14 +1799,14 @@ export function FloorplanEnhancer() {
       role="presentation"
     >
       <div
-        className="w-full max-w-md rounded-none border border-[#d8d2c8] bg-white shadow-[0_12px_40px_rgba(0,0,0,0.35)]"
+        className="w-full max-w-md rounded-lg border border-stone-200 bg-white shadow-[0_12px_40px_rgba(0,0,0,0.35)]"
         onClick={(event) => event.stopPropagation()}
         role="alertdialog"
         aria-labelledby="approve-destination-title"
         aria-describedby="approve-destination-description"
       >
-        <div className="flex items-start justify-between gap-3 border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
-          <h2 id="approve-destination-title" className="text-sm font-semibold text-[#4d463f]">
+        <div className="flex items-start justify-between gap-3 border-b border-stone-100 bg-stone-50 px-4 py-3">
+          <h2 id="approve-destination-title" className="text-sm font-semibold text-stone-800">
             Planritningen är klar
           </h2>
           <button
@@ -1823,22 +1814,22 @@ export function FloorplanEnhancer() {
             onClick={closeApproveDestinationModal}
             disabled={isReviewSubmitting}
             aria-label="Stäng"
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <X size={14} aria-hidden="true" />
           </button>
         </div>
         <div className="px-4 py-4">
-          <p id="approve-destination-description" className="text-sm text-[#6a6258]">
+          <p id="approve-destination-description" className="text-sm text-stone-600">
             Fortsätt redigera om du vill göra fler ändringar, eller spara planritningen direkt.
           </p>
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-stone-100 bg-stone-50 px-4 py-3">
           <button
             type="button"
             onClick={() => void submitGenerationReview("approve", "verktyg")}
             disabled={isReviewSubmitting}
-            className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+            className={buttonClass("primary", "lg", "sm:min-w-[157px]")}
           >
             {isReviewSubmitting ? "Sparar..." : "Redigera"}
           </button>
@@ -1846,7 +1837,7 @@ export function FloorplanEnhancer() {
             type="button"
             onClick={() => void submitGenerationReview("approve", "planritningar")}
             disabled={isReviewSubmitting}
-            className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+            className={buttonClass("primary", "lg", "sm:min-w-[157px]")}
           >
             {isReviewSubmitting ? "Sparar..." : "Spara"}
           </button>
@@ -1858,7 +1849,7 @@ export function FloorplanEnhancer() {
   return (
     <div
       ref={rootRef}
-      className="mx-auto w-full max-w-3xl space-y-4 rounded-none border border-[#d8d2c8] bg-white p-5 text-left text-[#4d463f] shadow-sm"
+      className="w-full space-y-5 rounded-2xl border border-stone-200 bg-white p-4 text-left text-stone-800 shadow-[0_1px_2px_rgba(28,25,23,0.04),0_16px_40px_-24px_rgba(28,25,23,0.16)] sm:p-6"
     >
       <input
         ref={fileInputRef}
@@ -1870,11 +1861,41 @@ export function FloorplanEnhancer() {
 
       {isSubmitting ? (
         <>
-          <ProcessingView statusMessage={processingStatusMessage} />
+          <ProcessingView statusMessage={processingStatusMessage} label={normaliseImageLabel(propertyLabel)} />
           {multiRun ? <StoreyProgress labels={multiRun.labels} done={multiRun.done} /> : null}
         </>
       ) : (
         <>
+          {showDropzone ? (
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <label htmlFor="property-label" className="text-[13px] font-medium text-stone-800">
+                    Adress eller namn
+                  </label>
+                  <InfoTip label="Om adress eller namn">
+                    Namnet visas i arkivet och går att söka på, både under Planritningar och i
+                    snabbsöket (⌘K). Du kan ändra det senare genom att klicka på namnet.
+                  </InfoTip>
+                </span>
+                <span className="text-xs text-stone-400">Valfritt</span>
+              </div>
+              <input
+                id="property-label"
+                type="text"
+                autoComplete="off"
+                maxLength={IMAGE_LABEL_MAX_LENGTH}
+                value={propertyLabel}
+                onChange={(event) => setPropertyLabel(event.target.value)}
+                placeholder="t.ex. Storgatan 12, Göteborg"
+                className="h-11 w-full rounded-lg border border-stone-200 bg-white px-3.5 text-sm text-stone-900 shadow-[0_1px_2px_rgba(28,25,23,0.04)] outline-none transition placeholder:text-stone-400 hover:border-stone-300 focus:border-accent focus:ring-4 focus:ring-accent/15"
+              />
+              <p className="mt-1.5 text-xs text-stone-500">
+                Planritningen sparas under det här namnet, så att den är lätt att hitta i arkivet.
+              </p>
+            </div>
+          ) : null}
+
           {showDropzone ? (
             <label
               onDrop={handleDrop}
@@ -1890,16 +1911,28 @@ export function FloorplanEnhancer() {
                 }
               }}
               tabIndex={0}
-              className={`flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-none border-2 border-dashed px-6 py-8 text-center transition ${
+              className={`group flex min-h-56 cursor-pointer flex-col items-center justify-center rounded-xl border-[1.5px] border-dashed px-6 py-10 text-center transition ${
                 isDragActive
-                  ? "border-[#b8aea0] bg-[#f2ede5]"
-                  : "border-[#d8d2c8] bg-[#faf8f4] hover:border-[#b8aea0]"
+                  ? "border-accent bg-accent/5"
+                  : "border-stone-300 bg-stone-50/70 hover:border-stone-400 hover:bg-stone-50"
               }`}
             >
-              <p className="text-sm font-medium text-[#5c544a]">
-                Dra och släpp en planritning här, eller klicka för att välja fil.
+              <span
+                className={`flex h-12 w-12 items-center justify-center rounded-xl bg-white shadow-[0_1px_2px_rgba(28,25,23,0.06)] ring-1 ring-stone-200 transition group-hover:-translate-y-0.5 ${
+                  isDragActive ? "text-accent" : "text-stone-500"
+                }`}
+              >
+                <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" aria-hidden="true">
+                  <path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+              </span>
+              <p className="mt-4 text-[15px] font-medium text-stone-900">
+                {isDragActive ? "Släpp för att ladda upp" : "Dra hit en planritning"}
               </p>
-              <p className="mt-2 text-xs text-[#7b746a]">Stöd: PNG, JPG, WEBP</p>
+              <p className="mt-1 text-sm text-stone-500">
+                eller <span className="font-medium text-stone-800 underline decoration-stone-300 underline-offset-4">välj en fil</span> · PNG, JPG eller WEBP
+              </p>
             </label>
           ) : null}
 
@@ -1927,11 +1960,24 @@ export function FloorplanEnhancer() {
                 event.preventDefault();
                 submitPolycamLink();
               }}
-              className="space-y-2"
+              className="space-y-2.5"
             >
-              <label htmlFor="polycam-link" className="block text-sm font-medium text-[#5c544a]">
-                Eller klistra in en Polycam-länk
-              </label>
+              <div className="flex items-center gap-3 py-1 text-xs font-medium uppercase tracking-[0.08em] text-stone-400" aria-hidden="true">
+                <span className="h-px flex-1 bg-stone-200" />
+                eller
+                <span className="h-px flex-1 bg-stone-200" />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <label htmlFor="polycam-link" className="text-[13px] font-medium text-stone-800">
+                  Från en Polycam-skanning
+                </label>
+                <InfoTip label="Så får du en Polycam-länk">
+                  <span className="mb-1.5 block font-medium text-stone-900">Så får du en länk</span>
+                  <span className="block">1. Skanna bostaden i Polycams rums- eller planritningsläge (kräver en iPhone eller iPad med LiDAR).</span>
+                  <span className="block">2. Öppna skanningen och dela den som en publik länk.</span>
+                  <span className="block">3. Klistra in länken här. Har skanningen flera våningar får du välja vilka som ska ritas innan något kostar.</span>
+                </InfoTip>
+              </div>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <input
                   id="polycam-link"
@@ -1942,17 +1988,17 @@ export function FloorplanEnhancer() {
                   value={polycamLink}
                   onChange={(event) => setPolycamLink(event.target.value)}
                   placeholder="https://poly.cam/capture/…"
-                  className="min-w-0 flex-1 rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm text-[#4d463f] placeholder:text-[#9a9288] focus:border-[#b8aea0] focus:outline-none"
+                  className="h-11 w-full min-w-0 rounded-lg sm:w-auto sm:flex-1 border border-stone-200 bg-white px-3.5 text-sm text-stone-900 shadow-[0_1px_2px_rgba(28,25,23,0.04)] outline-none transition placeholder:text-stone-400 hover:border-stone-300 focus:border-accent focus:ring-4 focus:ring-accent/15"
                 />
                 <button
                   type="submit"
                   disabled={isSubmitting || isInspecting || polycamLink.trim().length === 0}
-                  className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+                  className={buttonClass("primary", "lg", "sm:min-w-[157px]")}
                 >
                   {isInspecting ? "Läser skanningen..." : "Hämta från Polycam"}
                 </button>
               </div>
-              <p className="text-xs text-[#7b746a]">
+              <p className="text-xs text-stone-500">
                 Skanningen måste vara gjord i Polycams rums- eller planritningsläge och delad som
                 publik länk.
               </p>
@@ -1960,7 +2006,7 @@ export function FloorplanEnhancer() {
           ) : null}
 
           {errorMessage ? (
-            <p className="rounded-sm border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               {errorMessage}
             </p>
           ) : null}
@@ -1968,12 +2014,12 @@ export function FloorplanEnhancer() {
           {sourcePreviewUrl ? (
         <div className="space-y-3">
           {!resultPreviewUrl ? (
-            <figure className="mx-auto w-fit max-w-full overflow-hidden rounded-none border border-[#d8d2c8] bg-white">
-              <figcaption className="flex items-center justify-between gap-3 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-[#7b746a]">Original</span>
+            <figure className="mx-auto w-fit max-w-full overflow-hidden rounded-lg border border-stone-200 bg-white">
+              <figcaption className="flex items-center justify-between gap-3 border-b border-stone-100 bg-stone-50 px-3 py-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-stone-500">Original</span>
                 <div className="flex items-center gap-2">
                   {sourceImageId ? (
-                    <span className="text-xs font-semibold text-[#6a6258]">
+                    <span className="text-xs font-semibold text-stone-600">
                       {imageDisplayName(sourceImageId)}
                     </span>
                   ) : null}
@@ -1982,7 +2028,7 @@ export function FloorplanEnhancer() {
                   onClick={leavePreview}
                   disabled={isSubmitting}
                   aria-label="Lämna bildvy"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <X size={14} aria-hidden="true" />
                 </button>
@@ -1997,20 +2043,20 @@ export function FloorplanEnhancer() {
                 onClick={openSourcePreview}
                 className="h-auto w-auto max-h-[min(60vh,640px)] max-w-full cursor-zoom-in bg-white"
               />
-              <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-3 pt-3 leading-normal">
+              <div className="border-t border-stone-100 bg-stone-50 px-3 pt-3 leading-normal">
                 <CompassControl
                   value={plannedCompass}
                   onChange={setPlannedCompass}
                   disabled={isSubmitting}
                 />
               </div>
-              <div className="flex flex-wrap items-center justify-end gap-2 bg-[#f7f4ef] px-4 py-3">
+              <div className="flex flex-wrap items-center justify-end gap-2 bg-stone-50 px-4 py-3">
                 {errorMessage ? (
                   <button
                     type="button"
                     onClick={startConversion}
                     disabled={isSubmitting || !sourcePreviewUrl}
-                    className="rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+                    className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     Försök igen
                   </button>
@@ -2019,7 +2065,7 @@ export function FloorplanEnhancer() {
                   type="button"
                   onClick={startConversion}
                   disabled={isSubmitting || !sourcePreviewUrl}
-                  className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+                  className={buttonClass("primary", "lg", "sm:min-w-[157px]")}
                 >
                   {isSubmitting ? "Konverterar..." : "Starta konvertering"}
                 </button>
@@ -2040,16 +2086,16 @@ export function FloorplanEnhancer() {
 
           {showGenerationReview ? (
             <figure
-              className={`mx-auto overflow-hidden rounded-none border border-[#d8d2c8] bg-white leading-none ${
+              className={`mx-auto overflow-hidden rounded-lg border border-stone-200 bg-white leading-none ${
                 isCompareReviewReady ? "w-fit max-w-full" : "w-full max-w-3xl"
               }`}
             >
-              <figcaption className="flex items-center justify-between gap-3 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-[#7b746a]">
+              <figcaption className="flex items-center justify-between gap-3 border-b border-stone-100 bg-stone-50 px-3 py-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-stone-500">
                   Före / Efter
                 </span>
                 {resultImageId ? (
-                  <span className="text-xs font-semibold text-[#6a6258]">
+                  <span className="text-xs font-semibold text-stone-600">
                     {activeFloor !== null && floors.length > 1 ? `${floors[activeFloor]?.label} · ` : ""}
                     {imageDisplayName(resultImageId)}
                   </span>
@@ -2067,10 +2113,11 @@ export function FloorplanEnhancer() {
                   loadingFallback={<ComparePreviewSkeleton showWatermark={protectResultPreview} />}
                   onReadyChange={handleCompareSliderReadyChange}
                   playEntranceAnimation={!resultImageId || !compassEditedIds.includes(resultImageId)}
+                  alignRegion={compareAlignRegion(resultImageId)}
                 />
               ) : null}
               {isCompareReviewReady && resultImageId && sheetCompass[resultImageId] ? (
-                <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-3 py-3 leading-normal">
+                <div className="border-t border-stone-100 bg-stone-50 px-3 py-3 leading-normal">
                   <CompassControl
                     value={sheetCompass[resultImageId].settings}
                     onChange={changeSheetCompass}
@@ -2083,25 +2130,42 @@ export function FloorplanEnhancer() {
                 </div>
               ) : null}
               {isCompareReviewReady && alignedSourcePreviewUrl && showRejectForm ? (
-                <div className="space-y-3 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4">
-                  <p className="text-sm font-medium text-[#5c544a]">
+                <div className="space-y-3 border-t border-stone-100 bg-stone-50 px-4 py-4">
+                  <p className="text-sm font-medium text-stone-700">
                     Beskriv vad som ska bli annorlunda. Kommentaren följer med till den nya
                     konverteringen, så den behövs för att gå vidare.
                   </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {REJECT_SUGGESTIONS.map((suggestion) => (
+                      <button
+                        key={suggestion}
+                        type="button"
+                        disabled={isReviewSubmitting}
+                        onClick={() =>
+                          setRejectComment((previous) =>
+                            previous.trim() ? `${previous.trim()} ${suggestion}.` : `${suggestion}.`,
+                          )
+                        }
+                        className="rounded-full border border-stone-200 bg-white px-2.5 py-1 text-xs text-stone-700 transition hover:border-stone-300 hover:bg-stone-100 disabled:opacity-60"
+                      >
+                        + {suggestion}
+                      </button>
+                    ))}
+                  </div>
                   <textarea
                     value={rejectComment}
                     onChange={(event) => setRejectComment(event.target.value)}
                     rows={3}
-                    placeholder="Skriv din kommentar här..."
+                    placeholder="T.ex. Väggen mellan kök och vardagsrum saknas, och badrummet ska ha ett fönster."
                     disabled={isReviewSubmitting}
-                    className="w-full resize-y rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm text-[#4d463f] outline-none transition focus:border-[#b8aea0] disabled:cursor-not-allowed disabled:opacity-60"
+                    className="w-full resize-y rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-800 outline-none transition focus:border-stone-300 disabled:cursor-not-allowed disabled:opacity-60"
                   />
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <button
                       type="button"
                       onClick={cancelRejectForm}
                       disabled={isReviewSubmitting}
-                      className="rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+                      className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       Avbryt
                     </button>
@@ -2109,19 +2173,19 @@ export function FloorplanEnhancer() {
                       type="button"
                       onClick={() => void submitGenerationReview("reject")}
                       disabled={isReviewSubmitting || !rejectComment.trim()}
-                      className="inline-flex min-w-[157px] items-center justify-center rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+                      className={buttonClass("primary", "lg", "sm:min-w-[157px]")}
                     >
                       {isReviewSubmitting ? "Startar..." : "Starta ny konvertering"}
                     </button>
                   </div>
                 </div>
               ) : activeFloorApproved ? (
-                <p className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4 text-center text-sm font-medium text-[#3f6b3f]">
+                <p className="border-t border-stone-100 bg-stone-50 px-4 py-4 text-center text-sm font-medium text-[#3f6b3f]">
                   {floors[activeFloor ?? 0]?.label} är godkänd och sparad.
                 </p>
               ) : isCompareReviewReady && alignedSourcePreviewUrl ? (
-                <div className="border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-4">
-                  <p className="mb-3 text-center text-sm font-medium text-[#5c544a]">
+                <div className="border-t border-stone-100 bg-stone-50 px-4 py-4">
+                  <p className="mb-3 text-center text-sm font-medium text-stone-700">
                     Godkänner du den bearbetade bilden?
                   </p>
                   <div className="flex flex-wrap items-center justify-center gap-3">
@@ -2129,7 +2193,7 @@ export function FloorplanEnhancer() {
                       type="button"
                       onClick={openRejectForm}
                       disabled={isReviewSubmitting}
-                      className="inline-flex min-w-[157px] items-center justify-center gap-1.5 rounded-none border border-[#d8d2c8] bg-white px-3 py-2 text-sm font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex min-w-[157px] items-center justify-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm font-semibold text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       Konvertera på nytt
                       <RotateCcw size={14} aria-hidden="true" />
@@ -2138,7 +2202,7 @@ export function FloorplanEnhancer() {
                       type="button"
                       onClick={openApproveDestinationModal}
                       disabled={isReviewSubmitting}
-                      className="inline-flex min-w-[157px] items-center justify-center gap-1.5 rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-2 text-sm font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+                      className="inline-flex min-w-[157px] items-center justify-center gap-1.5 rounded-lg border border-primary bg-primary px-3 py-2 text-sm font-semibold text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       Godkänn
                       <Check size={14} aria-hidden="true" />
@@ -2164,22 +2228,22 @@ export function FloorplanEnhancer() {
           role="presentation"
         >
           <div
-            className="relative flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-none border border-[#d8d2c8] bg-white shadow-[0_12px_40px_rgba(0,0,0,0.35)]"
+            className="relative flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-stone-200 bg-white shadow-[0_12px_40px_rgba(0,0,0,0.35)]"
             onClick={(event) => event.stopPropagation()}
             role="presentation"
           >
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-100 bg-stone-50 px-3 py-2">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={zoomPreviewOut}
                   disabled={previewZoom <= MIN_PREVIEW_ZOOM}
                   aria-label="Zooma ut"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Minus size={15} aria-hidden="true" />
                 </button>
-                <span className="w-14 text-center text-xs font-semibold text-[#6a6258]">
+                <span className="w-14 text-center text-xs font-semibold text-stone-600">
                   {Math.round(previewZoom * 100)}%
                 </span>
                 <button
@@ -2187,7 +2251,7 @@ export function FloorplanEnhancer() {
                   onClick={zoomPreviewIn}
                   disabled={previewZoom >= MAX_PREVIEW_ZOOM}
                   aria-label="Zooma in"
-                  className="inline-flex h-8 w-8 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Plus size={15} aria-hidden="true" />
                 </button>
@@ -2195,7 +2259,7 @@ export function FloorplanEnhancer() {
                   type="button"
                   onClick={resetPreviewZoom}
                   aria-label="Återställ zoom"
-                  className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-2 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
+                  className="inline-flex h-8 items-center gap-1 rounded-lg border border-stone-200 bg-white px-2 text-xs font-semibold text-stone-800 transition hover:bg-stone-100"
                 >
                   <RotateCcw size={13} aria-hidden="true" />
                   Reset
@@ -2206,13 +2270,13 @@ export function FloorplanEnhancer() {
                 type="button"
                 onClick={closeImagePreview}
                 aria-label="Stäng bildvisning"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5]"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100"
               >
                 <X size={16} aria-hidden="true" />
               </button>
             </div>
 
-            <div className="flex-1 overflow-auto bg-[#f0ece6] p-4">
+            <div className="flex-1 overflow-auto bg-stone-100 p-4">
               <div className="mx-auto flex min-h-full w-full items-center justify-center">
                 <div
                   className="relative touch-none select-none transition-transform duration-150"
@@ -2239,7 +2303,7 @@ export function FloorplanEnhancer() {
                     height={1600}
                     unoptimized
                     draggable={false}
-                    className="h-auto max-h-[calc(90vh-190px)] w-auto max-w-full border border-[#d8d2c8] bg-white object-contain"
+                    className="h-auto max-h-[calc(90vh-190px)] w-auto max-w-full border border-stone-200 bg-white object-contain"
                   />
                   {protectResultPreview && previewImageType === "result" ? (
                     <WatermarkOverlay />

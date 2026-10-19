@@ -29,7 +29,13 @@ export type FloorplanObjectBase = FloorplanTransform & {
   visible?: boolean;
 };
 
-export type WallObject = FloorplanObjectBase & {
+/**
+ * Shared by the pieces of one scanned wall and the doors and windows in it. Hand-drawn objects
+ * have none.
+ */
+type AttachedToWall = { wallId?: string };
+
+export type WallObject = FloorplanObjectBase & AttachedToWall & {
   type: "wall";
   x2: number;
   y2: number;
@@ -43,6 +49,8 @@ export type RoomLabelObject = FloorplanObjectBase & {
   fontFamily: string;
   fill: string;
   textAlign: "left" | "center" | "right";
+  /** Floor area of the room from its scanned outline. Never drawn. */
+  areaM2?: number;
 };
 
 export type DimensionObject = FloorplanObjectBase & {
@@ -54,14 +62,14 @@ export type DimensionObject = FloorplanObjectBase & {
   strokeWidth: number;
 };
 
-export type DoorObject = FloorplanObjectBase & {
+export type DoorObject = FloorplanObjectBase & AttachedToWall & {
   type: "door";
   width: number;
   swing: "left" | "right";
   strokeWidth: number;
 };
 
-export type WindowObject = FloorplanObjectBase & {
+export type WindowObject = FloorplanObjectBase & AttachedToWall & {
   type: "window";
   width: number;
   height: number;
@@ -132,10 +140,25 @@ export type FloorplanDocumentMeta = {
   updatedAt: string;
 };
 
+/** Real-world size of the drawing. Only plans made from a scan have one. */
+export type FloorplanScale = {
+  pxPerMeter: number;
+};
+
+/** Where on the canvas the plan itself is drawn, in canvas pixels. Only blank and scanned plans have one. */
+export type FloorplanDrawingArea = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export type FloorplanDocument = {
   version: typeof FLOORPLAN_DOCUMENT_VERSION;
   canvas: FloorplanCanvasMeta;
   meta: FloorplanDocumentMeta;
+  scale?: FloorplanScale;
+  drawingArea?: FloorplanDrawingArea;
   objects: FloorplanObject[];
 };
 
@@ -158,6 +181,8 @@ export type FloorplanSymbolDefinition = {
   defaultWidth: number;
   defaultHeight: number;
   paths: string[];
+  /** Abbreviation written in the box (K/F, DM…). The scan import keeps such boxes upright. */
+  text?: string;
 };
 
 export type FurnitureDefinition = {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { requireRole } from "@/lib/server-auth";
 import {
+  BLANK_FLOORPLAN_PREFIX,
   BUCKET_NAME,
   GENERATED_PREFIX,
   getAdminSupabase,
@@ -22,7 +23,33 @@ const MAX_LIMIT = 500;
 export type ImageListItem = UploadedImageRow & {
   /** Storage eTag. Goes into the image URL so the browser can cache it as immutable. */
   version: string | null;
+  /** The name someone gave it, usually an address. Null when unnamed or not yet migrated. */
+  label: string | null;
 };
+
+/**
+ * Names for the given rows, read separately and best-effort: the column arrives with
+ * database/2026-10-15-uploaded-images-label.sql, and a list must not fail before it has run.
+ */
+async function readLabels(
+  supabase: NonNullable<ReturnType<typeof getAdminSupabase>>,
+  ids: number[],
+): Promise<Map<number, string>> {
+  const labels = new Map<number, string>();
+  if (ids.length === 0) {
+    return labels;
+  }
+  const { data, error } = await supabase.from(UPLOADS_TABLE).select("id, label").in("id", ids);
+  if (error || !data) {
+    return labels;
+  }
+  for (const row of data as { id: number; label: string | null }[]) {
+    if (row.label) {
+      labels.set(row.id, row.label);
+    }
+  }
+  return labels;
+}
 
 function parseIsoDate(value: string | null): string | null {
   if (!value) {
@@ -33,7 +60,9 @@ function parseIsoDate(value: string | null): string | null {
 }
 
 /**
- * GET /api/images?kind=uploads|generated[&saved=1][&from=ISO&to=ISO][&limit=N][&count=1]
+ * GET /api/images?kind=uploads|generated|scans[&saved=1][&from=ISO&to=ISO][&limit=N][&count=1]
+ *
+ * `scans` are the plans started from a LiDAR scan or a blank page (a subset of `generated`).
  *
  * The only way the browser reads the image tables. The pages used to query Supabase directly
  * with the public key, which meant the public key had to be allowed to read everything.
@@ -70,16 +99,19 @@ export async function GET(request: Request) {
       .from(BUCKET_NAME)
       .list(folder, { search: typed.file_path.slice(folder.length + 1), limit: 1 });
     const version = normaliseEtag((listed?.[0]?.metadata as { eTag?: unknown } | null)?.eTag);
-    const item: ImageListItem = { ...typed, version };
+    const labels = await readLabels(supabase, [typed.id]);
+    const item: ImageListItem = { ...typed, version, label: labels.get(typed.id) ?? null };
     return NextResponse.json({ item }, { headers: { "Cache-Control": "no-store" } });
   }
 
   const kind = searchParams.get("kind");
-  if (kind !== "uploads" && kind !== "generated") {
+  if (kind !== "uploads" && kind !== "generated" && kind !== "scans") {
     return NextResponse.json({ message: "Ogiltig listtyp." }, { status: 400 });
   }
 
-  const prefix = kind === "uploads" ? UPLOADS_PREFIX : GENERATED_PREFIX;
+  // Scans are stored among the generations; the folder is what storage can list.
+  const folder = kind === "uploads" ? UPLOADS_PREFIX : GENERATED_PREFIX;
+  const prefix = kind === "scans" ? BLANK_FLOORPLAN_PREFIX : folder;
   const savedOnly = searchParams.get("saved") === "1";
   const from = parseIsoDate(searchParams.get("from"));
   const to = parseIsoDate(searchParams.get("to"));
@@ -121,7 +153,7 @@ export async function GET(request: Request) {
     applyFilters(supabase.from(UPLOADS_TABLE).select(UPLOADED_IMAGE_COLUMNS))
       .order("created_at", { ascending: false })
       .limit(limit),
-    listStorageVersions(supabase, prefix),
+    listStorageVersions(supabase, folder),
   ]);
 
   if (rowsResult.error) {
@@ -130,9 +162,14 @@ export async function GET(request: Request) {
   }
 
   const rows = (rowsResult.data ?? []) as unknown as UploadedImageRow[];
+  const labels = await readLabels(
+    supabase,
+    rows.map((row) => row.id),
+  );
   const items: ImageListItem[] = rows.map((row) => ({
     ...row,
     version: versions.get(row.file_path) ?? null,
+    label: labels.get(row.id) ?? null,
   }));
 
   return NextResponse.json({ items }, { headers: { "Cache-Control": "no-store" } });

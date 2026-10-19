@@ -31,10 +31,10 @@ export function StoreyGallery({
   return (
     <section
       aria-label="Alla våningar"
-      className="mx-auto w-full max-w-3xl space-y-3 border border-[#d8d2c8] bg-[#f7f4ef] p-3"
+      className="mx-auto w-full max-w-3xl space-y-3 border border-stone-200 bg-stone-50 p-3"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-[#7b746a]">
+        <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">
           Våningar ({floors.length - pendingCount} av {floors.length} godkända)
         </p>
         {pendingCount > 1 ? (
@@ -42,7 +42,7 @@ export function StoreyGallery({
             type="button"
             onClick={onApproveAll}
             disabled={disabled}
-            className="inline-flex items-center gap-1.5 rounded-none border border-[#5c544a] bg-[#5c544a] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-primary bg-primary px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             Godkänn alla ({pendingCount})
             <Check size={14} aria-hidden="true" />
@@ -59,16 +59,16 @@ export function StoreyGallery({
                 onClick={() => onSelect(index)}
                 aria-pressed={active}
                 className={`block w-full border bg-white p-1.5 text-left transition ${
-                  active ? "border-[#5c544a] ring-1 ring-[#5c544a]" : "border-[#d8d2c8] hover:border-[#b8aea0]"
+                  active ? "border-primary ring-1 ring-stone-700" : "border-stone-200 hover:border-stone-300"
                 }`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={imageUrl(floor.conversion.savedImageId, "thumb", savedImageVersion(floor.conversion.savedImageUrl))}
                   alt={floor.label}
-                  className="aspect-[1/1.414] w-full bg-[#f2ede5] object-contain"
+                  className="aspect-[1/1.414] w-full bg-stone-100 object-contain"
                 />
-                <span className="mt-1.5 flex items-center justify-between gap-1 text-xs font-semibold text-[#4d463f]">
+                <span className="mt-1.5 flex items-center justify-between gap-1 text-xs font-semibold text-stone-800">
                   <span>{floor.label}</span>
                   {floor.status === "approved" ? (
                     <span className="inline-flex items-center gap-0.5 text-[#3f6b3f]">
@@ -87,7 +87,7 @@ export function StoreyGallery({
                 type="button"
                 onClick={() => onEnlarge(index)}
                 aria-label={`Förstora ${floor.label}`}
-                className="absolute right-2.5 top-2.5 inline-flex h-6 w-6 items-center justify-center border border-[#d8d2c8] bg-white/90 text-[#4d463f] transition hover:bg-white"
+                className="absolute right-2.5 top-2.5 inline-flex h-6 w-6 items-center justify-center border border-stone-200 bg-white/90 text-stone-800 transition hover:bg-white"
               >
                 <Maximize2 size={13} aria-hidden="true" />
               </button>

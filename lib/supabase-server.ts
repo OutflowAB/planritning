@@ -22,6 +22,7 @@ export const GENERATION_EVENTS_TABLE = "generation_events";
 export const SCAN_UPLOADS_PREFIX = "uploads/polycam-";
 export const UPLOADS_PREFIX = "uploads/";
 export const GENERATED_PREFIX = "generated/";
+export { BLANK_FLOORPLAN_PREFIX } from "@/lib/floorplan/image-url";
 export const THUMBNAILS_PREFIX = "thumbs/";
 
 let cachedClient: SupabaseClient | null = null;

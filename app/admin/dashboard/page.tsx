@@ -14,10 +14,10 @@ type StatCardProps = {
 
 function StatCard({ label, value, helpText }: StatCardProps) {
   return (
-    <article className="rounded-none border border-[#d8d2c8] bg-[#f7f4ef] p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-[#7b746a]">{label}</p>
-      <p className="mt-3 text-3xl font-semibold text-[#3d3a36]">{value}</p>
-      <p className="mt-2 text-xs text-[#7b746a]">{helpText}</p>
+    <article className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-stone-500">{label}</p>
+      <p className="mt-3 text-3xl font-semibold text-stone-900">{value}</p>
+      <p className="mt-2 text-xs text-stone-500">{helpText}</p>
     </article>
   );
 }
@@ -64,17 +64,17 @@ export default function AdminDashboardPage() {
   const isLoading = counts === null && !loadError;
 
   return (
-    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-4 py-6 sm:px-6 sm:py-10">
+    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-canvas px-4 py-6 sm:px-6 sm:py-10">
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-        <div className="rounded-none border border-[#d8d2c8] bg-white p-4 text-[#3d3a36] shadow-sm sm:p-6 md:p-8">
+        <div className="rounded-lg border border-stone-200 bg-white p-4 text-stone-900 shadow-sm sm:p-6 md:p-8">
           <h1 className="text-2xl font-semibold md:text-3xl">Dashboard</h1>
-          <p className="mt-2 text-sm text-[#6a6258]">
+          <p className="mt-2 text-sm text-stone-600">
             Snabb översikt av uppladdningar, genereringar och estimerad kostnad.
           </p>
         </div>
 
         {loadError ? (
-          <p className="rounded-none border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
             {loadError}
           </p>
         ) : null}

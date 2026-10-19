@@ -89,9 +89,9 @@ function ToastItem({
       aria-live="polite"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      className={`flex min-w-[280px] max-w-sm flex-col overflow-hidden rounded-none border text-sm shadow-[0_12px_40px_rgba(0,0,0,0.18)] ${
+      className={`flex min-w-[280px] max-w-sm flex-col overflow-hidden rounded-lg border text-sm shadow-[0_12px_40px_rgba(0,0,0,0.18)] ${
         isSuccess
-          ? "border-[#d8d2c8] bg-[#f7f4ef] text-[#4d463f]"
+          ? "border-stone-200 bg-stone-50 text-stone-800"
           : "border-red-200 bg-red-50 text-red-800"
       }`}
     >
@@ -102,7 +102,7 @@ function ToastItem({
           onClick={() => onDismiss(toast.id)}
           aria-label="Stäng meddelande"
           className={`inline-flex h-6 w-6 shrink-0 items-center justify-center transition hover:opacity-70 ${
-            isSuccess ? "text-[#6a6258]" : "text-red-700"
+            isSuccess ? "text-stone-600" : "text-red-700"
           }`}
         >
           <X size={14} aria-hidden="true" />
@@ -110,7 +110,7 @@ function ToastItem({
       </div>
       <div className="h-0.5 w-full" aria-hidden="true">
         <div
-          className={`h-full w-full origin-left ${isSuccess ? "bg-[#5c544a]" : "bg-red-500"}`}
+          className={`h-full w-full origin-left ${isSuccess ? "bg-primary" : "bg-red-500"}`}
           style={{ transform: `scaleX(${progress})` }}
         />
       </div>

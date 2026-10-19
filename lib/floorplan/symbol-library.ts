@@ -86,6 +86,47 @@ export const FLOORPLAN_SYMBOLS: FloorplanSymbolDefinition[] = [
     defaultHeight: 36,
     paths: ["M6 6 h24 v24 h-24 Z", "M10 10 h16 v16 h-16 Z"],
   },
+  // Fittings the LiDAR scan import places; sized like the rest at about 0.6 px per cm.
+  {
+    id: "handfat",
+    label: "Handfat",
+    category: "badrum",
+    defaultWidth: 33,
+    defaultHeight: 27,
+    paths: ["M1 1 h31 v25 h-31 Z", "M6 8 h21 v14 h-21 Z", "M16.5 1 v8"],
+  },
+  {
+    id: "bankskiva",
+    label: "Bänkskiva",
+    category: "kök",
+    defaultWidth: 72,
+    defaultHeight: 36,
+    paths: ["M1 1 h70 v34 h-70 Z"],
+  },
+  {
+    id: "diskmaskin",
+    label: "Diskmaskin",
+    category: "kök",
+    defaultWidth: 36,
+    defaultHeight: 36,
+    paths: ["M1 1 h34 v34 h-34 Z", "M1 8 h34"],
+  },
+  {
+    id: "ugn",
+    label: "Ugn/Mikro",
+    category: "kök",
+    defaultWidth: 36,
+    defaultHeight: 36,
+    paths: ["M1 1 h34 v34 h-34 Z", "M7 9 h22 v20 h-22 Z"],
+  },
+  {
+    id: "garderob",
+    label: "Garderob",
+    category: "övrigt",
+    defaultWidth: 36,
+    defaultHeight: 36,
+    paths: ["M1 1 h34 v34 h-34 Z", "M1 1 l34 34", "M35 1 l-34 34"],
+  },
   {
     id: "el",
     label: "Eluttag",
@@ -152,6 +193,16 @@ export const FLOORPLAN_FURNITURE: FurnitureDefinition[] = [
 
 export function getSymbolById(symbolId: string) {
   return FLOORPLAN_SYMBOLS.find((symbol) => symbol.id === symbolId) ?? null;
+}
+
+/**
+ * A box turned to whatever quarter turn leaves it most level. Turning a box a quarter turn is the
+ * same as swapping its sides, so the footprint is unchanged.
+ */
+export function uprightBox(width: number, height: number, rotation: number) {
+  const quarters = Math.round(rotation / 90);
+  const level = rotation - quarters * 90;
+  return quarters % 2 === 0 ? { width, height, rotation: level } : { width: height, height: width, rotation: level };
 }
 
 export function getFurnitureById(furnitureId: string) {

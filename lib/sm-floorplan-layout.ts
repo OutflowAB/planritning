@@ -5,6 +5,8 @@ export const SM_INK = "#1A1A1A";
 export const SM_INK_MUTED = "#4D463F";
 export const SM_WALL_STROKE = 3;
 export const SM_DIMENSION_STROKE = 1.5;
+/** Line width of doors, windows, stairs and fixtures drawn from a scan. */
+export const SM_ICON_STROKE = 2;
 export const SM_ROOM_LABEL_FONT = "Arial, Helvetica, sans-serif";
 export const SM_DIMENSION_FONT = "Arial, Helvetica, sans-serif";
 
@@ -30,3 +32,10 @@ export const SM_EDITOR = {
   eraserCursorBorderWidth: 1,
   eraserCursorBorderColor: "rgba(77, 70, 63, 0.55)",
 } as const;
+
+const SM_ROOM_LABEL_SIZE_RATIO = 0.015;
+
+/** Room name size for a canvas this wide, so labels read the same on every plan size. */
+export function roomLabelFontSize(canvasWidth: number) {
+  return Math.max(12, Math.round(canvasWidth * SM_ROOM_LABEL_SIZE_RATIO));
+}

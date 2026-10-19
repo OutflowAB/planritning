@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "walls": [
+    { "start": [0, 0], "end": [6, 0], "thickness": 0.2 },
+    { "start": [6, 0], "end": [6, 3], "thickness": 0.2 },
+    { "start": [6, 3], "end": [3, 3], "thickness": 0.2 },
+    { "start": [3, 3], "end": [3, 6], "thickness": 0.2 },
+    { "start": [3, 6], "end": [0, 6], "thickness": 0.2 },
+    { "start": [0, 6], "end": [0, 0], "thickness": 0.2 }
+  ],
+  "doors": [{ "wall": 4, "offset": 1, "width": 1 }],
+  "windows": [
+    { "wall": 0, "offset": 1, "width": 1.5 },
+    { "wall": 0, "offset": 4, "width": 1.2 },
+    { "wall": 5, "offset": 2, "width": 1.2 }
+  ],
+  "rooms": [
+    {
+      "name": "Allrum",
+      "center": [2, 2],
+      "outline": [[0, 0], [6, 0], [6, 3], [3, 3], [3, 6], [0, 6]]
+    }
+  ],
+  "objects": [
+    { "category": "stairs", "center": [1.5, 4.8], "width": 1, "depth": 2, "rotation": 0 },
+    { "category": "sofa", "center": [4.5, 1.5], "width": 2, "depth": 0.9 }
+  ]
+}

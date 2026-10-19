@@ -5,6 +5,8 @@ import { Check, ChevronLeft, ChevronRight, Loader2, Minus, Plus, X } from "lucid
 import { TouchEvent, WheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiJson, describeError } from "@/lib/api-client";
+import { formatDateTime } from "@/lib/format-date";
+import { Page, PageHeader } from "@/components/layout/page";
 import { imageUrl } from "@/lib/image-url";
 import { imageDisplayName } from "@/lib/image-naming";
 
@@ -279,25 +281,21 @@ export default function FaktureringPage() {
   }
 
   return (
-    <section className="flex min-h-[calc(100vh-4rem)] w-full items-center justify-center bg-[#f5f3f0] px-4 py-6 sm:px-6 sm:py-10">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-        <div className="rounded-none border border-[#d8d2c8] bg-white p-6 text-[#3d3a36] shadow-sm md:p-8">
-        <div className="border-b border-[#e8e2d8] pb-5">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <h1 className="text-2xl font-semibold text-[#3d3a36] md:text-3xl">
-              Fakturaöversikt
-            </h1>
-
+    <Page>
+      <PageHeader
+        title="Fakturering"
+        description={`Genereringar och kostnad per period. Varje färdig planritning kostar ${SEK_PER_GENERATION} kr.`}
+        actions={
             <div className="w-full md:w-auto">
               <div
                 ref={periodMenuRef}
-                className="relative flex w-full flex-nowrap items-center justify-center gap-1 rounded-md border border-[#d8d2c8] bg-[#f7f4ef] p-1 md:w-auto"
+                className="relative flex w-full flex-nowrap items-center justify-center gap-1 rounded-xl border border-stone-200 bg-white p-1 shadow-[0_1px_2px_rgba(28,25,23,0.05)] md:w-auto"
               >
               <button
                 type="button"
                 aria-label="Föregående period"
                 onClick={() => setPeriodOffset((previous) => previous - 1)}
-                className="flex h-10 w-12 shrink-0 items-center justify-center rounded-sm border border-[#d8d2c8] bg-transparent text-[#5b544a] transition hover:bg-white focus:outline-none"
+                className="flex h-8 w-9 shrink-0 items-center justify-center rounded-lg text-stone-500 transition hover:bg-stone-100 hover:text-stone-900"
               >
                 <ChevronLeft size={16} aria-hidden="true" />
               </button>
@@ -307,7 +305,7 @@ export default function FaktureringPage() {
                 aria-expanded={isPeriodMenuOpen}
                 aria-label="Välj period"
                 onClick={() => setIsPeriodMenuOpen((previous) => !previous)}
-                className="flex h-10 w-[150px] shrink-0 cursor-pointer items-center justify-center rounded-sm bg-transparent px-4 py-2 text-sm font-semibold text-[#3d3a36] outline-none transition"
+                className="flex h-8 w-[150px] shrink-0 cursor-pointer items-center justify-center rounded-lg px-3 text-sm font-medium text-stone-900 transition hover:bg-stone-100"
               >
                 <span className="w-full truncate text-center">{periodHeading}</span>
               </button>
@@ -316,13 +314,13 @@ export default function FaktureringPage() {
                 aria-label="Nästa period"
                 onClick={() => setPeriodOffset((previous) => Math.min(0, previous + 1))}
                 disabled={!canStepForward}
-                className="flex h-10 w-12 shrink-0 items-center justify-center rounded-sm border border-[#d8d2c8] bg-transparent text-[#5b544a] transition hover:bg-white focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent"
+                className="flex h-8 w-9 shrink-0 items-center justify-center rounded-lg text-stone-500 transition hover:bg-stone-100 hover:text-stone-900 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
               >
                 <ChevronRight size={16} aria-hidden="true" />
               </button>
 
               {isPeriodMenuOpen ? (
-                <div className="absolute right-0 z-20 mt-2 w-full rounded-none border border-[#d8d2c8] bg-white p-1 shadow-[0_8px_24px_rgba(61,48,40,0.15)]">
+                <div className="absolute right-0 z-20 mt-2 w-full rounded-lg border border-stone-200 bg-white p-1 shadow-[0_12px_32px_-8px_rgba(28,25,23,0.18)]">
                   <ul role="listbox" aria-label="Periodval" className="space-y-1">
                     {periodOptions.map((period) => (
                       <li key={period}>
@@ -335,15 +333,15 @@ export default function FaktureringPage() {
                             setPeriodOffset(0);
                             setIsPeriodMenuOpen(false);
                           }}
-                          className={`flex w-full items-center justify-between rounded-none px-3 py-2 text-left text-sm font-medium transition ${
+                          className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm font-medium transition ${
                             selectedPeriod === period
-                              ? "bg-[#f2ede5] text-[#3d3a36]"
-                              : "text-[#4d463f] hover:bg-[#f7f4ef]"
+                              ? "bg-stone-100 text-stone-900"
+                              : "text-stone-800 hover:bg-stone-50"
                           }`}
                         >
                           <span>{periodLabels[period]}</span>
                           {selectedPeriod === period ? (
-                            <Check size={15} aria-hidden="true" className="text-[#7a6a60]" />
+                            <Check size={15} aria-hidden="true" className="text-stone-500" />
                           ) : null}
                         </button>
                       </li>
@@ -353,81 +351,80 @@ export default function FaktureringPage() {
               ) : null}
               </div>
             </div>
-          </div>
-          <p className="mt-2 text-sm text-[#6a6258]">
-            Översikt över genereringar och kostnad för vald period.
+        }
+      />
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <article className="rounded-xl border border-stone-200 bg-white p-5 shadow-[0_1px_2px_rgba(28,25,23,0.04)]">
+          <p className="text-sm text-stone-500">Planritningar</p>
+          <p className="mt-2 text-3xl font-semibold tracking-tight text-stone-900 tabular-nums">
+            {isLoading ? <span className="inline-block h-8 w-12 animate-pulse rounded bg-stone-100 align-middle" /> : generationCount}
           </p>
-        </div>
+          <p className="mt-1 text-xs text-stone-500">{periodHeading}</p>
+        </article>
 
-        <div className="mt-6 grid gap-4 md:grid-cols-2">
-          <article className="rounded-none border border-[#d8d2c8] bg-[#f7f4ef] p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-[#7b746a]">
-              Antal genereringar
-            </p>
-            <p className="mt-3 text-3xl font-semibold text-[#3d3a36]">
-              {isLoading ? "..." : generationCount}
-            </p>
-            <p className="mt-2 text-xs text-[#7b746a]">
-              Summerat från vald period.
-            </p>
-          </article>
-
-          <article className="rounded-none border border-[#d8d2c8] bg-[#f7f4ef] p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-[#7b746a]">
-              Kostnad
-            </p>
-            <p className="mt-3 text-3xl font-semibold text-[#3d3a36]">
-              {isLoading ? "..." : `${totalCostSek} kr`}
-            </p>
-            <p className="mt-2 text-xs text-[#7b746a]">
-              Baserat på {SEK_PER_GENERATION} kr per generering.
-            </p>
-          </article>
-        </div>
-
-        {loadError ? (
-          <p className="mt-6 rounded-none border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-            {loadError}
-          </p>
-        ) : null}
-        </div>
-
-        {!loadError ? (
-          <div className="rounded-none border border-[#d8d2c8] bg-[#faf8f4] shadow-sm">
+        <article className="rounded-xl border border-stone-200 bg-white p-5 shadow-[0_1px_2px_rgba(28,25,23,0.04)]">
+          <p className="text-sm text-stone-500">Kostnad</p>
+          <p className="mt-2 text-3xl font-semibold tracking-tight text-stone-900 tabular-nums">
             {isLoading ? (
-              <p className="px-4 py-3 text-sm text-[#6a6258]">Laddar logg...</p>
-            ) : null}
-
-            {!isLoading && generationLogs.length === 0 ? (
-              <p className="px-4 py-3 text-sm text-[#6a6258]">
-                Inga genereringar i vald period.
-              </p>
-            ) : null}
-
-            {!isLoading && generationLogs.length > 0 ? (
-              <div className="divide-y divide-[#e8e2d8]">
-                {generationLogs.map((log) => (
-                  <button
-                    key={log.id}
-                    type="button"
-                    onClick={() => void openImagePreview(log)}
-                    className="flex w-full cursor-zoom-in items-center justify-between gap-3 px-4 py-3 text-left text-sm transition hover:bg-[#f2ede5]"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate font-medium text-[#3d3a36]">{imageDisplayName(log.id)}</p>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <p className="text-xs text-[#7b746a]">
-                        {new Date(log.created_at).toLocaleString("sv-SE")}
-                      </p>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+              <span className="inline-block h-8 w-24 animate-pulse rounded bg-stone-100 align-middle" />
+            ) : (
+              `${new Intl.NumberFormat("sv-SE").format(totalCostSek)} kr`
+            )}
+          </p>
+          <p className="mt-1 text-xs text-stone-500">{SEK_PER_GENERATION} kr per planritning</p>
+        </article>
       </div>
+
+      {loadError ? (
+        <p className="mt-6 rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm text-red-700">
+          {loadError}
+        </p>
+      ) : (
+        <div className="mt-6 overflow-hidden rounded-xl border border-stone-200 bg-white shadow-[0_1px_2px_rgba(28,25,23,0.04)]">
+          <div className="grid grid-cols-[1fr_auto_auto] gap-6 border-b border-stone-100 bg-stone-50/70 px-5 py-2.5 text-xs font-medium text-stone-500">
+            <span>Planritning</span>
+            <span>Skapad</span>
+            <span className="w-14 text-right">Belopp</span>
+          </div>
+
+          {isLoading ? (
+            <div className="divide-y divide-stone-100" aria-busy="true">
+              {Array.from({ length: 4 }, (_, index) => (
+                <div key={index} className="flex items-center justify-between px-5 py-3.5">
+                  <div className="h-3.5 w-20 animate-pulse rounded bg-stone-100" />
+                  <div className="h-3 w-28 animate-pulse rounded bg-stone-100" />
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {!isLoading && generationLogs.length === 0 ? (
+            <p className="px-5 py-10 text-center text-sm text-stone-500">
+              Inga planritningar skapades under perioden.
+            </p>
+          ) : null}
+
+          {!isLoading && generationLogs.length > 0 ? (
+            <div className="divide-y divide-stone-100">
+              {generationLogs.map((log) => (
+                <button
+                  key={log.id}
+                  type="button"
+                  onClick={() => void openImagePreview(log)}
+                  className="grid w-full cursor-zoom-in grid-cols-[1fr_auto_auto] items-center gap-6 px-5 py-3 text-left text-sm transition hover:bg-stone-50"
+                >
+                  <span className="truncate font-medium text-stone-900">{imageDisplayName(log.id)}</span>
+                  <span className="text-xs text-stone-500 tabular-nums">{formatDateTime(log.created_at)}</span>
+                  <span className="w-14 text-right text-sm text-stone-700 tabular-nums">
+                    {SEK_PER_GENERATION} kr
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
 
       {previewLog ? (
         <div
@@ -436,24 +433,24 @@ export default function FaktureringPage() {
           role="presentation"
         >
           <div
-            className="relative flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-none border border-[#d8d2c8] bg-white shadow-[0_12px_40px_rgba(0,0,0,0.35)]"
+            className="relative flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-stone-200 bg-white shadow-[0_12px_40px_rgba(0,0,0,0.35)]"
             onClick={(event) => event.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-label={`Förhandsvisning av ${imageDisplayName(previewLog.id)}`}
           >
-            <div className="flex items-center justify-between gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
+            <div className="flex items-center justify-between gap-2 border-b border-stone-100 bg-stone-50 px-3 py-2">
               <div className="flex min-w-0 items-center gap-2">
                 <button
                   type="button"
                   onClick={zoomPreviewOut}
                   disabled={previewZoom <= MIN_PREVIEW_ZOOM || isPreviewLoading}
                   aria-label="Zooma ut"
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Minus size={15} aria-hidden="true" />
                 </button>
-                <span className="w-14 shrink-0 text-center text-xs font-semibold text-[#6a6258]">
+                <span className="w-14 shrink-0 text-center text-xs font-semibold text-stone-600">
                   {Math.round(previewZoom * 100)}%
                 </span>
                 <button
@@ -461,11 +458,11 @@ export default function FaktureringPage() {
                   onClick={zoomPreviewIn}
                   disabled={previewZoom >= MAX_PREVIEW_ZOOM || isPreviewLoading}
                   aria-label="Zooma in"
-                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   <Plus size={15} aria-hidden="true" />
                 </button>
-                <span className="truncate text-xs font-semibold text-[#6a6258]">
+                <span className="truncate text-xs font-semibold text-stone-600">
                   {imageDisplayName(previewLog.id)}
                 </span>
               </div>
@@ -474,16 +471,16 @@ export default function FaktureringPage() {
                 type="button"
                 onClick={closeImagePreview}
                 aria-label="Stäng bildvisning"
-                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5]"
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100"
               >
                 <X size={16} aria-hidden="true" />
               </button>
             </div>
 
-            <div className="relative flex-1 overflow-auto bg-[#f0ece6] p-4">
+            <div className="relative flex-1 overflow-auto bg-stone-100 p-4">
               <div className="mx-auto flex min-h-[50vh] w-full items-center justify-center">
                 {isPreviewLoading || !previewUrl ? (
-                  <Loader2 size={28} className="animate-spin text-[#7b746a]" aria-hidden="true" />
+                  <Loader2 size={28} className="animate-spin text-stone-500" aria-hidden="true" />
                 ) : (
                   <div
                     className="w-full touch-none select-none"
@@ -512,6 +509,6 @@ export default function FaktureringPage() {
           </div>
         </div>
       ) : null}
-    </section>
+    </Page>
   );
 }

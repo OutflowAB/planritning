@@ -34,7 +34,7 @@ export function ThumbnailImage({
   sizes,
   priority = false,
   emptyLabel = "Ingen bildförhandsvisning",
-  frameClassName = "border border-[#d8d2c8] bg-white",
+  frameClassName = "border border-stone-200 bg-white",
   onLoad,
   onPrefetch,
 }: ThumbnailImageProps) {
@@ -43,7 +43,7 @@ export function ThumbnailImage({
   if (!src) {
     return (
       <div
-        className={`flex ${heightClassName} w-full items-center justify-center rounded-none border border-[#d8d2c8] bg-[#f7f4ef] text-sm text-[#7b746a]`}
+        className={`flex ${heightClassName} w-full items-center justify-center rounded-lg border border-stone-200 bg-stone-50 text-sm text-stone-500`}
       >
         {emptyLabel}
       </div>
@@ -52,13 +52,13 @@ export function ThumbnailImage({
 
   return (
     <div
-      className={`relative ${heightClassName} w-full overflow-hidden rounded-none ${frameClassName}`}
+      className={`relative ${heightClassName} w-full overflow-hidden rounded-lg ${frameClassName}`}
       onMouseEnter={onPrefetch}
       onFocus={onPrefetch}
     >
       {isLoaded ? null : (
         <div
-          className="absolute inset-0 animate-pulse bg-[#ece7df]"
+          className="absolute inset-0 animate-pulse bg-stone-100"
           aria-hidden="true"
           data-testid="thumbnail-skeleton"
         />

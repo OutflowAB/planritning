@@ -128,7 +128,7 @@ export function ProtectedRoute({ children, requiredRole }: ProtectedRouteProps) 
         role="status"
         aria-live="polite"
       >
-        <span className="inline-flex items-center gap-2 text-sm text-[#6a6258]">
+        <span className="inline-flex items-center gap-2 text-sm text-stone-600">
           <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
           Laddar...
         </span>

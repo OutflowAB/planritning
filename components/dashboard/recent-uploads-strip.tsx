@@ -37,7 +37,7 @@ export function RecentUploadsStrip() {
   if (isLoading) {
     return (
       <div
-        className="flex items-center justify-center gap-2 rounded-sm border border-slate-300 bg-slate-50 px-4 py-5 text-slate-600"
+        className="flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-slate-50 px-4 py-5 text-slate-600"
         role="status"
         aria-live="polite"
       >
@@ -61,7 +61,7 @@ export function RecentUploadsStrip() {
           <li key={upload.id}>
             <Link
               href={`/uppladdningar?previewImageId=${upload.id}`}
-              className="group flex flex-col overflow-hidden rounded-sm border border-slate-300 bg-white text-left shadow-sm transition hover:border-slate-400 hover:shadow-md"
+              className="group flex flex-col overflow-hidden rounded-md border border-slate-300 bg-white text-left shadow-sm transition hover:border-slate-400 hover:shadow-md"
             >
               <div className="bg-slate-100 p-3">
                 <ThumbnailImage

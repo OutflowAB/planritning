@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "walls": [
+    { "start": [0, 0], "end": [5, 0], "thickness": 0.2 },
+    { "start": [5, 0], "end": [5, 4], "thickness": 0.2 },
+    { "start": [5, 4], "end": [0, 4], "thickness": 0.2 },
+    { "start": [0, 4], "end": [0, 0], "thickness": 0.2 }
+  ],
+  "doors": [{ "wall": 0, "offset": 1, "width": 0.9 }],
+  "windows": [
+    { "wall": 2, "offset": 1.5, "width": 1.2 },
+    { "wall": 1, "offset": 1, "width": 1.5 }
+  ],
+  "rooms": [{ "name": "Vardagsrum", "center": [2.5, 2], "outline": [[0, 0], [5, 0], [5, 4], [0, 4]] }]
+}

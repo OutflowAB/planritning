@@ -24,6 +24,7 @@ import {
   getFloorplanMeta,
   hasFloorplanBackground,
   isCanvasOperational,
+  moveAttachedObjects,
   renderDocumentToCanvas,
   sortFloorplanObjectsByLayer,
   syncCanvasToDocument,
@@ -44,6 +45,8 @@ import { renderFloorplanDocumentToPngDataUrl } from "@/lib/floorplan/export-libr
 import { publishFloorplanImage } from "@/lib/floorplan/publish-floorplan";
 import { imageDownloadBaseName } from "@/lib/image-naming";
 import { snapFloorplanObjectPosition } from "@/lib/floorplan/fabric/object-snapping";
+import { formatMeters, lineLengthInMeters } from "@/lib/floorplan/measure";
+import { originalDocument } from "@/lib/floorplan/original-document";
 import type { EditorTool, FloorplanDocument, FloorplanObject } from "@/lib/floorplan/types";
 import { createObjectId } from "@/lib/floorplan/types";
 import type { Canvas, FabricObject } from "fabric";
@@ -84,6 +87,8 @@ function isTextInputTarget(target: EventTarget | null) {
 export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEditorOptions) {
   const canvasRef = useRef<Canvas | null>(null);
   const [history, setHistory] = useState<FloorplanHistoryState | null>(null);
+  /** The plan as first imported (a LiDAR scan), which "Original" returns to. Null for others. */
+  const [sourceDocument, setSourceDocument] = useState<FloorplanDocument | null>(null);
   const [activeTool, setActiveTool] = useState<EditorTool>("select");
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [selectedSymbolId, setSelectedSymbolId] = useState<string>("wc");
@@ -190,10 +195,11 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
       canvas.on("selection:cleared", () => {
         setSelectedObjectId(null);
       });
-      canvas.on("object:modified", () => {
+      canvas.on("object:modified", (event) => {
         if (canvas.isDrawingMode) {
           return;
         }
+        moveAttachedObjects(canvas, event.target, event.action, event.transform?.original);
         syncFromCanvasRef.current();
       });
 
@@ -242,12 +248,17 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
           imagePath: approvedImage.file_path,
         });
         let nextDocument: FloorplanDocument | null = null;
+        let nextSource: FloorplanDocument | null = null;
         try {
           const response = await apiFetch(`/api/floorplan-document?${params.toString()}`, {
             cache: "no-store",
           });
-          const data = (await response.json()) as { document?: FloorplanDocument };
+          const data = (await response.json()) as {
+            document?: FloorplanDocument;
+            sourceDocument?: FloorplanDocument | null;
+          };
           nextDocument = data.document ?? null;
+          nextSource = data.sourceDocument ?? null;
         } catch (error) {
           // No saved document yet is a normal state; anything else is a real failure.
           if (!(error instanceof ApiError && error.kind === "not-found")) {
@@ -273,6 +284,7 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
         }
 
         setHistory(createHistoryState(nextDocument));
+        setSourceDocument(nextSource);
         setIsDirty(false);
         setIsLoading(false);
       } catch (error) {
@@ -395,10 +407,14 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
         const start = placementStartRef.current;
         placementStartRef.current = null;
 
+        const line = { x: start.x, y: start.y, x2: point.x, y2: point.y };
+
         addObject({
           ...createDefaultDimension(start.x, start.y),
           x2: point.x,
           y2: point.y,
+          // A scanned plan knows its scale, so the measurement can be written for you.
+          ...(document.scale ? { label: formatMeters(lineLengthInMeters(document.scale, line)) } : {}),
         } as FloorplanObject);
         setActiveTool("select");
         return;
@@ -625,24 +641,17 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
       return false;
     }
 
-    const nextDocument = touchDocument(
-      createEmptyDocument({
-        imageId: currentDocument.meta.imageId,
-        imagePath: currentDocument.meta.imagePath,
-        fileName: currentDocument.meta.fileName,
-        canvasWidth: currentDocument.canvas.width,
-        canvasHeight: currentDocument.canvas.height,
-      }),
-    );
+    // A scan goes back to what was imported; any other plan is cleared.
+    const nextDocument = touchDocument(originalDocument(currentDocument, sourceDocument));
 
     documentRef.current = nextDocument;
     commitDocument(nextDocument);
     setSelectedObjectId(null);
     setRenderRevision((version) => version + 1);
     return true;
-  }, [commitDocument]);
+  }, [commitDocument, sourceDocument]);
 
-  const canResetToOriginal = Boolean(document && document.objects.length > 0);
+  const canResetToOriginal = Boolean(document && (document.objects.length > 0 || sourceDocument));
 
   const saveDocument = useCallback(async () => {
     const canvas = canvasRef.current;

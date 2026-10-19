@@ -109,7 +109,7 @@ export function CompassControl({
 
   return (
     <fieldset
-      className="flex flex-wrap items-center gap-x-5 gap-y-3 border border-[#e8e2d8] bg-white px-3 py-3"
+      className="flex flex-wrap items-center gap-x-5 gap-y-3 border border-stone-100 bg-white px-3 py-3"
       aria-label="Kompass"
       disabled={off}
     >
@@ -133,10 +133,10 @@ export function CompassControl({
               data-direction={direction.key}
               onClick={() => onChange({ ...value, rotation: direction.rotation })}
               style={{ gridRow: position.row, gridColumn: position.column }}
-              className={`inline-flex items-center justify-center rounded-none border text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+              className={`inline-flex items-center justify-center rounded-lg border text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
                 active
-                  ? "border-[#5c544a] bg-[#5c544a] text-white"
-                  : "border-[#d8d2c8] bg-white text-[#4d463f] hover:bg-[#f2ede5]"
+                  ? "border-primary bg-primary text-white"
+                  : "border-stone-200 bg-white text-stone-800 hover:bg-stone-100"
               }`}
             >
               {direction.key}
@@ -149,18 +149,18 @@ export function CompassControl({
       </div>
       <div className="min-w-[160px] flex-1 space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-[#4d463f]">
+          <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-stone-800">
             <input
               type="checkbox"
               checked={value.visible}
               onChange={(event) => onChange({ ...value, visible: event.target.checked })}
-              className="h-4 w-4 accent-[#5c544a]"
+              className="h-4 w-4 accent-stone-700"
             />
             Visa kompass på planritningen
           </label>
-          {busy ? <span className="text-xs text-[#7b746a]">Uppdaterar…</span> : null}
+          {busy ? <span className="text-xs text-stone-500">Uppdaterar…</span> : null}
         </div>
-        <p className="text-xs text-[#7b746a]">
+        <p className="text-xs text-stone-500">
           {unavailableReason ?? "Välj åt vilket håll norr pekar på planritningen."}
         </p>
       </div>

@@ -36,7 +36,7 @@ type FloorplanEditorProps = {
 function EditorCanvasLoading() {
   return (
     <div
-      className="flex min-h-0 flex-1 items-center justify-center bg-[#ebe7e1] text-sm text-[#6a6258]"
+      className="flex min-h-0 flex-1 items-center justify-center bg-stone-200 text-sm text-stone-600"
       aria-busy="true"
       aria-live="polite"
     >
@@ -107,7 +107,7 @@ export function FloorplanEditor({
   const blockingCanvasError = imageLoadError;
 
   return (
-    <section className="flex h-[calc(100vh-4rem)] max-h-[calc(100vh-4rem)] w-full flex-col overflow-hidden bg-[#f5f3f0]">
+    <section className="flex h-[calc(100dvh-3rem)] max-h-[calc(100dvh-3rem)] w-full flex-col overflow-hidden bg-canvas">
       <EditorTopBar
         controller={controller}
         showPublish={!approvedImage.is_saved}
@@ -126,34 +126,34 @@ export function FloorplanEditor({
           role="presentation"
         >
           <div
-            className="w-full max-w-md rounded-none border border-[#d8d2c8] bg-white shadow-[0_12px_40px_rgba(0,0,0,0.35)]"
+            className="w-full max-w-md rounded-lg border border-stone-200 bg-white shadow-[0_12px_40px_rgba(0,0,0,0.35)]"
             onClick={(event) => event.stopPropagation()}
             role="alertdialog"
             aria-labelledby="reset-original-title"
             aria-describedby="reset-original-description"
           >
-            <div className="border-b border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
-              <h2 id="reset-original-title" className="text-sm font-semibold text-[#4d463f]">
+            <div className="border-b border-stone-100 bg-stone-50 px-4 py-3">
+              <h2 id="reset-original-title" className="text-sm font-semibold text-stone-800">
                 Återställ till original?
               </h2>
             </div>
             <div className="px-4 py-4">
-              <p id="reset-original-description" className="text-sm text-[#6a6258]">
+              <p id="reset-original-description" className="text-sm text-stone-600">
                 Alla ändringar tas bort och planritningen återgår till originalbilden.
               </p>
             </div>
-            <div className="flex justify-end gap-2 border-t border-[#e8e2d8] bg-[#f7f4ef] px-4 py-3">
+            <div className="flex justify-end gap-2 border-t border-stone-100 bg-stone-50 px-4 py-3">
               <button
                 type="button"
                 onClick={() => setShowResetConfirm(false)}
-                className="rounded-none border border-[#d8d2c8] bg-white px-3 py-1.5 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5]"
+                className="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-semibold text-stone-800 transition hover:bg-stone-100"
               >
                 Avbryt
               </button>
               <button
                 type="button"
                 onClick={confirmResetToOriginal}
-                className="rounded-none border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100"
+                className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100"
               >
                 Återställ original
               </button>
@@ -176,7 +176,7 @@ export function FloorplanEditor({
           {isEditorLoading ? (
             <EditorCanvasLoading />
           ) : blockingCanvasError ? (
-            <div className="flex min-h-0 flex-1 items-center justify-center bg-[#ebe7e1] px-6 text-center text-sm text-red-700">
+            <div className="flex min-h-0 flex-1 items-center justify-center bg-stone-200 px-6 text-center text-sm text-red-700">
               {blockingCanvasError}
             </div>
           ) : (

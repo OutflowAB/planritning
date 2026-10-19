@@ -31,14 +31,14 @@ export function EditorTopBar({
   showPublish = false,
 }: EditorTopBarProps) {
   return (
-    <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-[#e8e2d8] bg-[#f7f4ef] px-3 py-2">
+    <header className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-stone-100 bg-stone-50 px-3 py-2">
       <div className="flex items-center gap-2">
         {onLeave ? (
           <button
             type="button"
             onClick={onLeave}
             disabled={isLeaving || isPublishing || controller.isSaving || isLoading}
-            className="inline-flex items-center gap-1.5 rounded-none border border-[#d8d2c8] bg-white px-3 py-1.5 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-semibold text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <ArrowLeft size={14} aria-hidden="true" />
             {isLeaving ? "Lämnar..." : "Lämna"}
@@ -53,7 +53,7 @@ export function EditorTopBar({
             onClick={controller.undo}
             disabled={!controller.canUndo || isLoading}
             aria-label="Ångra"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Undo2 size={15} />
           </button>
@@ -62,7 +62,7 @@ export function EditorTopBar({
             onClick={controller.redo}
             disabled={!controller.canRedo || isLoading}
             aria-label="Gör om"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Redo2 size={15} />
           </button>
@@ -71,7 +71,7 @@ export function EditorTopBar({
               type="button"
               onClick={onResetToOriginal}
               disabled={!controller.canResetToOriginal || controller.isSaving || isLoading}
-              className="inline-flex h-8 items-center gap-1 rounded-none border border-[#d8d2c8] bg-white px-2 text-xs font-semibold text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-stone-200 bg-white px-2 text-xs font-semibold text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <RotateCcw size={14} aria-hidden="true" />
               Original
@@ -79,7 +79,7 @@ export function EditorTopBar({
           ) : null}
         </div>
 
-        <div aria-hidden="true" className="h-6 w-px shrink-0 bg-[#d8d2c8]" />
+        <div aria-hidden="true" className="h-6 w-px shrink-0 bg-stone-200" />
 
         <div className="flex items-center gap-1">
           <button
@@ -87,11 +87,11 @@ export function EditorTopBar({
             onClick={controller.zoomOut}
             disabled={controller.zoomLevel <= FLOORPLAN_MIN_ZOOM || isLoading}
             aria-label="Zooma ut"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Minus size={15} />
           </button>
-          <span className="min-w-[3rem] text-center text-xs font-semibold tabular-nums text-[#6a6258]">
+          <span className="min-w-[3rem] text-center text-xs font-semibold tabular-nums text-stone-600">
             {Math.round(controller.zoomLevel * 100)}%
           </span>
           <button
@@ -99,7 +99,7 @@ export function EditorTopBar({
             onClick={controller.zoomIn}
             disabled={controller.zoomLevel >= FLOORPLAN_MAX_ZOOM || isLoading}
             aria-label="Zooma in"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-none border border-[#d8d2c8] bg-white text-[#4d463f] transition hover:bg-[#f2ede5] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-stone-200 bg-white text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Plus size={15} />
           </button>
@@ -112,7 +112,7 @@ export function EditorTopBar({
             type="button"
             onClick={() => void onSaveAndPublish()}
             disabled={isPublishing || controller.isSaving || isLoading}
-            className="inline-flex items-center gap-1.5 rounded-none bg-[#5c544a] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#4f483f] disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-white transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isPublishing ? "Sparar..." : "Slutför"}
             <Check size={14} aria-hidden="true" />

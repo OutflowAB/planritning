@@ -520,7 +520,7 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
   return (
     <div
       ref={containerRef}
-      className="relative h-full min-h-0 w-full overflow-auto bg-[#ece7df]"
+      className="relative h-full min-h-0 w-full overflow-auto bg-stone-100"
       style={{ touchAction: "pan-x pan-y" }}
     >
       <div
@@ -535,7 +535,7 @@ export function EditorCanvas({ controller }: EditorCanvasProps) {
       >
         <div
           ref={canvasWrapperRef}
-          className={`absolute overflow-hidden border border-[#d8d2c8] bg-[#ece7df] shadow-sm [&_.canvas-container]:!h-full [&_.canvas-container]:!w-full ${
+          className={`absolute overflow-hidden border border-stone-200 bg-stone-100 shadow-sm [&_.canvas-container]:!h-full [&_.canvas-container]:!w-full ${
             isEraserActive ? "cursor-none" : ""
           }`}
           style={{
