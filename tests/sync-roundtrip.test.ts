@@ -5,7 +5,15 @@ import path from "node:path";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { attachExtendedData, createFabricObjectFromFloorplan, floorplanObjectFromFabric } from "@/lib/floorplan/fabric/sync";
+import { StaticCanvas } from "fabric";
+
+import {
+  attachExtendedData,
+  createFabricObjectFromFloorplan,
+  drawGuides,
+  floorplanObjectFromFabric,
+  syncCanvasToDocument,
+} from "@/lib/floorplan/fabric/sync";
 import { parseScanPlan, scanToFloorplanDocument } from "@/lib/floorplan/scan-import";
 import type { FloorplanDocument, FloorplanObject } from "@/lib/floorplan/types";
 import { createBlankFloorplanImage } from "@/lib/image/blank-floorplan";
@@ -67,5 +75,21 @@ describe("saving a plan from the canvas", () => {
     expect(room && room.type === "roomLabel" ? (roundTrip(room) as typeof room).areaM2 : undefined).toBe(
       room && room.type === "roomLabel" ? room.areaM2 : "missing",
     );
+  });
+});
+
+describe("guide lines", () => {
+  it("are drawn over the plan but never saved as objects, and can be switched off", () => {
+    const withGuide: FloorplanDocument = { ...plan, guides: { meshWindows: [[100, 100, 300, 100], [100, 200, 100, 400]] } };
+    const canvas = new StaticCanvas(undefined, { width: 1000, height: 800 });
+    drawGuides(canvas as never, withGuide, true);
+    expect(canvas.getObjects()).toHaveLength(2);
+
+    const saved = syncCanvasToDocument(canvas as never, withGuide);
+    expect(saved.objects).toHaveLength(0);
+    expect(saved.guides).toEqual(withGuide.guides);
+
+    drawGuides(canvas as never, withGuide, false);
+    expect(canvas.getObjects()).toHaveLength(0);
   });
 });

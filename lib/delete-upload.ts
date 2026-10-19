@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { rawImagePath, rawMetaPath } from "@/lib/image/sheet-source";
+import { meshPartPaths } from "@/lib/scan-mesh";
 
 type ImageRow = {
   id: number;
@@ -122,9 +123,12 @@ export async function deleteUploadRecord(
     }
   }
 
+  // A scan's 3D mesh goes with its plan.
+  const meshPaths = await meshPartPaths(supabase, id);
+
   const { error: storageError } = await supabase.storage
     .from("planritningar")
-    .remove([...storagePaths, ...thumbnailPaths, ...rawSheetPaths]);
+    .remove([...storagePaths, ...thumbnailPaths, ...rawSheetPaths, ...meshPaths]);
   if (storageError) {
     return {
       ok: false,

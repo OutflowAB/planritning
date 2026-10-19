@@ -18,7 +18,14 @@ extension ScanPlan {
         }
 
         func measured(_ surfaces: [CapturedRoom.Surface], as kind: MeasuredOpening.Kind) -> [MeasuredOpening] {
-            surfaces.map { MeasuredOpening(kind: kind, center: $0.transform.planPosition, width: Double($0.dimensions.x)) }
+            surfaces.map {
+                MeasuredOpening(
+                    kind: kind,
+                    center: $0.transform.planPosition,
+                    width: Double($0.dimensions.x),
+                    direction: $0.transform.planXAxis
+                )
+            }
         }
         let openings = measured(room.doors, as: .door)
             + measured(room.windows, as: .window)
@@ -34,18 +41,23 @@ extension ScanPlan {
             )
         }
 
-        self.init(walls: walls, openings: openings, rooms: Self.rooms(in: room), objects: objects)
+        self.init(walls: walls, openings: openings, rooms: Self.rooms(in: room), objects: objects, floor: Self.floor(of: room))
     }
 
-    /// Named rooms from RoomPlan's sections. RoomPlan measures one floor for the whole capture,
-    /// so it is a room's outline (and gives it an area) only when the capture is a single room.
-    private static func rooms(in room: CapturedRoom) -> [Room] {
-        let outline: [PlanPoint]? = room.floors.first.flatMap { floor in
+    /// The floor of the whole capture, seen from above.
+    private static func floor(of room: CapturedRoom) -> [PlanPoint]? {
+        room.floors.first.flatMap { floor in
             let corners = floor.polygonCorners.map { corner in
                 (floor.transform * SIMD4<Float>(corner, 1)).planPoint
             }
             return corners.count >= 3 ? corners : nil
         }
+    }
+
+    /// Named rooms from RoomPlan's sections. RoomPlan measures one floor for the whole capture,
+    /// so it is a room's outline (and gives it an area) only when the capture is a single room.
+    private static func rooms(in room: CapturedRoom) -> [Room] {
+        let outline = floor(of: room)
 
         guard !room.sections.isEmpty else {
             guard let outline else { return [] }

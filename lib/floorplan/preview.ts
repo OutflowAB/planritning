@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import sharp from "sharp";
 
 import type { FloorplanDocument, FloorplanObject } from "@/lib/floorplan/types";
@@ -58,6 +60,15 @@ export function documentPreviewSvg(document: FloorplanDocument): string {
     .map(shape)
     .join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${body}</svg>`;
+}
+
+/**
+ * The version of an unfinished plan's picture: the stored page never changes, but the plan on it
+ * does, so the version follows the plan's last save. A short hash, since thumbnails are named
+ * after the version's first characters.
+ */
+export function draftVersion(pageVersion: string | null, savedAt: string): string {
+  return createHash("sha1").update(`${pageVersion ?? ""}|${savedAt}`).digest("hex").slice(0, 16);
 }
 
 /** The blank page with the plan's contents drawn on it. */

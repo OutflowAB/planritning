@@ -11,6 +11,7 @@ struct ContentView: View {
 
     @State private var phase = Phase.start
     @State private var stopRequested = false
+    @State private var mesh = MeshCollector()
 
     var body: some View {
         switch phase {
@@ -19,8 +20,20 @@ struct ContentView: View {
 
         case .scanning:
             ZStack(alignment: .bottom) {
-                RoomCaptureScreen(stopRequested: stopRequested, onFinish: finish)
+                RoomCaptureScreen(session: mesh.session, stopRequested: stopRequested, onFinish: finish)
                     .ignoresSafeArea()
+                // The mesh as a white net over RoomPlan's view (experiment).
+                MeshOverlay(session: mesh.session)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+                // Prototype: whether the LiDAR mesh is there and sees windows, live.
+                Text(mesh.status)
+                    .font(.caption.monospacedDigit())
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 8)
                 Button(stopRequested ? "Bearbetar…" : "Klar") {
                     stopRequested = true
                 }
@@ -40,13 +53,21 @@ struct ContentView: View {
 
     private func startScan() {
         stopRequested = false
+        mesh.stop()
+        mesh = MeshCollector()
+        mesh.start()
         phase = .scanning
     }
 
     private func finish(_ result: Result<CapturedRoom, any Error>) {
         do {
-            phase = .finished(try ScanFiles(room: result.get()))
+            let summary = mesh.summary()
+            // The 3D view is a help only; a scan without it still goes on.
+            let model = try? mesh.model()
+            mesh.stop()
+            phase = .finished(try ScanFiles(room: result.get(), mesh: summary, model: model))
         } catch {
+            mesh.stop()
             phase = .failed(error.localizedDescription)
         }
     }
@@ -89,20 +110,30 @@ private struct ResultView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
-                Image(systemName: "checkmark.circle")
-                    .font(.system(size: 56))
-                    .foregroundStyle(.tint)
-                    .padding(.top, 24)
                 Text("Skanningen är klar")
                     .font(.title2.bold())
+                    .padding(.top, 8)
+                PlanPreview(scan: files.scan)
+                    .frame(height: 320)
+                    .frame(maxWidth: .infinity)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
                 Text(files.summary)
                     .foregroundStyle(.secondary)
-                SendToWebAppView(scanFile: files.plan)
+                if let mesh = files.meshSummary {
+                    Text(meshLine(mesh))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                Text("Saknas något? Gör en ny skanning innan du skickar.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                SendToWebAppView(scanFile: files.plan, roomPlanFile: files.roomPlan, meshFile: files.mesh, modelFile: files.model)
                 Text("Eller dela filerna med AirDrop och välj Importera skanning under Skannare. Importera filen som inte slutar på \"-roomplan\".")
                     .font(.footnote)
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
-                ShareLink(items: [files.plan, files.roomPlan]) {
+                ShareLink(items: [files.plan, files.roomPlan] + [files.model, files.mesh].compactMap { $0 }) {
                     Label("Dela som fil", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity)
                 }
@@ -113,6 +144,16 @@ private struct ResultView: View {
             .padding(32)
         }
         .scrollDismissesKeyboard(.interactively)
+    }
+
+    /// What the LiDAR mesh found (prototype), in one line.
+    private func meshLine(_ mesh: MeshSummary) -> String {
+        guard mesh.meshAvailable else { return "Mesh: ingen" + (mesh.experiment.map { " (\($0))" } ?? "") }
+        let total = mesh.faceCounts.values.reduce(0, +)
+        let windows = mesh.faceCounts["window"] ?? 0
+        return mesh.classified
+            ? "Mesh: \(total.formatted()) ytor, varav \(windows.formatted()) fönster"
+            : "Mesh: \(total.formatted()) ytor (utan etiketter)"
     }
 }
 

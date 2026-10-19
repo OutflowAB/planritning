@@ -24,8 +24,9 @@ export const runtime = "nodejs";
 
 const PROFILES_TABLE = "profiles";
 
-// A real scan is a few kilobytes; this only stops someone posting something absurd.
-const MAX_BODY_BYTES = 2_000_000;
+// A scan is a few kilobytes; RoomPlan's own data sent along with it from the phone can be a few
+// megabytes. This stays under Vercel's 4.5 MB request limit.
+const MAX_BODY_BYTES = 4_000_000;
 
 // The canvas never changes while the server runs, so it is rendered once.
 let blankImage: ReturnType<typeof createBlankFloorplanImage> | null = null;
@@ -89,7 +90,7 @@ export async function POST(request: Request) {
   }
 
   let scan: ScanPlan | null = null;
-  const read = await readJsonCapped<{ scan?: unknown }>(request, MAX_BODY_BYTES);
+  const read = await readJsonCapped<{ scan?: unknown; roomPlan?: unknown; mesh?: unknown }>(request, MAX_BODY_BYTES);
   if (!read.ok) {
     return read.response.status === 413
       ? NextResponse.json({ message: "Skanningsfilen är för stor." }, { status: 413 })
@@ -102,6 +103,23 @@ export async function POST(request: Request) {
     }
     scan = parsed.scan;
   }
+  // Where the LiDAR mesh saw window, from above: the mesh's [x, height, z] becomes the plan's [x, y].
+  const meshPoints = (read.data?.mesh as { windowPoints?: unknown } | undefined)?.windowPoints;
+  if (scan && Array.isArray(meshPoints) && scan.meshWindows === undefined) {
+    const flat = meshPoints
+      .filter((point): point is number[] => Array.isArray(point) && point.length === 3 && point.every(Number.isFinite))
+      .map((point): [number, number] => [point[0], point[2]]);
+    const parsed = parseScanPlan({ ...scan, meshWindows: flat });
+    if (parsed.ok) scan = parsed.scan;
+  }
+
+  // RoomPlan's own data and what the LiDAR mesh labelled, kept as they came, only for looking into
+  // a scan later; never read back by the app.
+  const isObject = (value: unknown) => typeof value === "object" && value !== null;
+  const rawScan =
+    scan && (isObject(read.data?.roomPlan) || isObject(read.data?.mesh))
+      ? { roomPlan: isObject(read.data?.roomPlan) ? read.data?.roomPlan : null, mesh: isObject(read.data?.mesh) ? read.data?.mesh : null }
+      : null;
 
   const blank = await getBlankImage();
   const fileName = `${Date.now()}-${crypto.randomUUID()}.png`;
@@ -199,6 +217,15 @@ export async function POST(request: Request) {
     .eq("file_path", storagePath);
   if (sourceError) {
     console.warn("Could not keep the scan's original document", sourceError.message);
+  }
+  // Best-effort too: the column arrives with database/2026-10-20-scan-raw-data.sql.
+  if (rawScan) {
+    const { error: rawError } = await supabase
+      .from(DOCUMENTS_TABLE)
+      .update({ raw_scan: rawScan })
+      .eq("image_id", inserted.id)
+      .eq("file_path", storagePath);
+    if (rawError) console.warn("Could not keep the scan's raw data", rawError.message);
   }
 
   try {

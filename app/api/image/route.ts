@@ -2,10 +2,15 @@ import { createHash } from "node:crypto";
 
 import { NextResponse } from "next/server";
 
+import { renderDocumentPreview } from "@/lib/floorplan/preview";
+import type { FloorplanDocument } from "@/lib/floorplan/types";
+import { createBlankFloorplanImage } from "@/lib/image/blank-floorplan";
 import { createThumbnail, thumbnailPath } from "@/lib/image/thumbnail";
 import { requireRole } from "@/lib/server-auth";
 import {
+  BLANK_FLOORPLAN_PREFIX,
   BUCKET_NAME,
+  DOCUMENTS_TABLE,
   getAdminSupabase,
   serverConfigMissingResponse,
   UPLOADS_TABLE,
@@ -27,6 +32,16 @@ export const runtime = "nodejs";
 const IMMUTABLE = "private, max-age=31536000, immutable";
 /** For requests without a version: the browser may keep it, but has to ask again. */
 const REVALIDATE = "private, max-age=0, must-revalidate";
+
+// The untouched sheet a blank or scanned plan starts as; rendered once.
+let blankPage: ReturnType<typeof createBlankFloorplanImage> | null = null;
+function getBlankPage() {
+  blankPage ??= createBlankFloorplanImage().catch((error) => {
+    blankPage = null;
+    throw error;
+  });
+  return blankPage;
+}
 
 function etagFor(buffer: Buffer) {
   return `"${createHash("sha1").update(buffer).digest("hex")}"`;
@@ -81,7 +96,23 @@ export async function GET(request: Request) {
 
   const bucket = supabase.storage.from(BUCKET_NAME);
 
+  // A blank or scanned plan not yet finished is only its document on a blank page, so the page
+  // alone would look empty; it is drawn from the document as it is now. Finishing replaces the
+  // page with the finished plan, which is then shown as it is.
+  const drawDraft = async (page: Buffer): Promise<Buffer | null> => {
+    if (!row.file_path.startsWith(BLANK_FLOORPLAN_PREFIX)) return null;
+    if (!page.equals((await getBlankPage()).output)) return null;
+    const { data: saved } = await supabase
+      .from(DOCUMENTS_TABLE)
+      .select("document")
+      .eq("image_id", row.id)
+      .maybeSingle<{ document: FloorplanDocument | null }>();
+    return saved?.document?.objects?.length ? renderDocumentPreview(page, saved.document) : null;
+  };
+
   if (variant === "thumb") {
+    // The version of a blank or scanned plan follows its saves (see /api/images), so a thumbnail
+    // stored under it is never stale.
     const thumbPath = thumbnailPath(row.file_path, version ?? String(row.file_size));
 
     const { data: existing } = await bucket.download(thumbPath);
@@ -94,7 +125,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ message: "Bildfilen saknas i lagringen." }, { status: 404 });
     }
 
-    const thumbnail = await createThumbnail(Buffer.from(await original.arrayBuffer()));
+    const page = Buffer.from(await original.arrayBuffer());
+    // shortcut: every save leaves one more stored thumbnail of a draft (removed with the plan);
+    // prune older ones if storage of thumbnails ever matters.
+    const thumbnail = await createThumbnail((await drawDraft(page)) ?? page);
     // Best effort: a failed write costs another resize next time, nothing worse.
     void bucket.upload(thumbPath, thumbnail, { contentType: "image/webp", upsert: true });
 
@@ -106,9 +140,15 @@ export async function GET(request: Request) {
     return NextResponse.json({ message: "Bildfilen saknas i lagringen." }, { status: 404 });
   }
 
+  const bytes = Buffer.from(await file.arrayBuffer());
+  if (variant === "full") {
+    const drawn = await drawDraft(bytes);
+    if (drawn) return imageResponse(request, drawn, "image/png", Boolean(version));
+  }
+
   return imageResponse(
     request,
-    Buffer.from(await file.arrayBuffer()),
+    bytes,
     row.mime_type ?? "image/png",
     Boolean(version),
   );

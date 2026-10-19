@@ -8,6 +8,8 @@ import { polygonArea } from "@/lib/floorplan/measure";
 import {
   alignToWalls,
   cleanUpWalls,
+  fillWallsFromFloor,
+  meshWindowSpans,
   parseScanPlan,
   RAW_ROOMPLAN_MESSAGE,
   scanToFloorplanDocument,
@@ -503,5 +505,122 @@ describe("picking the wrong scan file", () => {
     };
     expect(parseScanPlan(raw)).toEqual({ ok: false, message: RAW_ROOMPLAN_MESSAGE });
     expect(parseScanPlan({ walls: [{ transform: [], dimensions: [] }] })).toEqual({ ok: false, message: RAW_ROOMPLAN_MESSAGE });
+  });
+});
+
+describe("fillWallsFromFloor", () => {
+  // A 6 × 4 m room whose right wall is a glass front the scanner did not find.
+  const floor: [number, number][] = [[0, 0], [6, 0], [6, 4], [0, 4]];
+  const threeWalls: ScanPlan = {
+    version: 1,
+    walls: [
+      { start: [0, 0], end: [6, 0] },
+      { start: [6, 4], end: [0, 4] },
+      { start: [0, 4], end: [0, 0] },
+    ],
+    windows: [{ wall: 0, offset: 1, width: 1.2 }],
+    floor,
+  };
+
+  it("puts back a wall missing along the floor edge, and leaves the others alone", () => {
+    const filled = fillWallsFromFloor(threeWalls);
+    expect(filled.walls).toHaveLength(4);
+    expect(filled.walls[3]).toEqual({ start: [6, 0], end: [6, 4] });
+    // The window still points at the wall it was in.
+    expect(filled.windows).toEqual(threeWalls.windows);
+  });
+
+  it("fills only the stretch that is missing when part of the wall was found", () => {
+    // RoomPlan found the first metre and a half of the glass front (a frame), slightly off the edge.
+    const partly = { ...threeWalls, walls: [...threeWalls.walls, { start: [6.1, 0], end: [6.1, 1.5] } as const] };
+    const filled = fillWallsFromFloor(partly as ScanPlan);
+    expect(filled.walls).toHaveLength(5);
+    expect(filled.walls[4].start[1]).toBeCloseTo(1.5);
+    expect(filled.walls[4].end[1]).toBeCloseTo(4);
+  });
+
+  it("ignores gaps too short to be a missing wall, such as at a corner", () => {
+    const nearlyClosed = { ...threeWalls, walls: [...threeWalls.walls, { start: [6, 0.3], end: [6, 3.8] } as const] };
+    expect(fillWallsFromFloor(nearlyClosed as ScanPlan).walls).toHaveLength(4);
+  });
+
+  it("uses a single room's outline when the scan has no floor, and does nothing without either", () => {
+    const { floor: _floor, ...withoutFloor } = threeWalls;
+    void _floor;
+    const oneRoom = { ...withoutFloor, rooms: [{ name: "Rum", center: [3, 2], outline: floor }] } as ScanPlan;
+    expect(fillWallsFromFloor(oneRoom).walls).toHaveLength(4);
+    expect(fillWallsFromFloor(withoutFloor as ScanPlan).walls).toHaveLength(3);
+  });
+
+  it("is used when a scan becomes a plan", () => {
+    const document = scanToFloorplanDocument(threeWalls, { canvasWidth: 1000, canvasHeight: 800, imageX: 0, imageY: 0, imageWidth: 1000, imageHeight: 800 }, META);
+    const walls = document.objects.filter((object): object is WallObject => object.type === "wall");
+    const rightmost = Math.max(...walls.flatMap((wall) => [wall.x, wall.x2]));
+    // A wall stands along the right edge, where there was none in the scan.
+    expect(walls.some((wall) => Math.abs(wall.x - rightmost) < 1 && Math.abs(wall.x2 - rightmost) < 1)).toBe(true);
+  });
+
+  it("accepts a valid floor outline and refuses a broken one", () => {
+    expect(parseScanPlan({ ...threeWalls }).ok).toBe(true);
+    expect(parseScanPlan({ ...threeWalls, floor: [[0, 0], [1, 1]] }).ok).toBe(false);
+    expect(parseScanPlan({ ...threeWalls, floor: [[0, 0], [1, "x"], [2, 2]] }).ok).toBe(false);
+  });
+});
+
+describe("meshWindowSpans", () => {
+  // A 6 × 4 m room. Its right wall is glass (no window from RoomPlan); the mesh saw window there.
+  const room: ScanPlan = {
+    version: 1,
+    walls: [
+      { start: [0, 0], end: [6, 0] },
+      { start: [6, 0], end: [6, 4] },
+      { start: [6, 4], end: [0, 4] },
+      { start: [0, 4], end: [0, 0] },
+    ],
+    windows: [{ wall: 0, offset: 1, width: 1.5 }],
+  };
+  // Points every 2 cm along a stretch of wall, a little off its line, as the mesh gives them.
+  const along = (x0: number, y0: number, x1: number, y1: number, off: [number, number] = [0, 0]) => {
+    const steps = Math.round(Math.hypot(x1 - x0, y1 - y0) / 0.02);
+    return Array.from({ length: steps }, (_, i): [number, number] => [x0 + ((x1 - x0) * i) / steps + off[0], y0 + ((y1 - y0) * i) / steps + off[1]]);
+  };
+
+  it("finds window seen along a wall, with a wide break kept as a break", () => {
+    const meshWindows = [...along(6, 0.2, 6, 1.8, [0.05, 0]), ...along(6, 2.5, 6, 3.8, [-0.05, 0])];
+    const right = meshWindowSpans({ ...room, meshWindows }).filter((span) => span.wall === 1);
+    expect(right).toHaveLength(2);
+    expect(right[0].from).toBeCloseTo(0.2, 1);
+    expect(right[0].to).toBeCloseTo(1.8, 1);
+    expect(right[1].from).toBeCloseTo(2.5, 1);
+  });
+
+  it("joins a gap as narrow as a window frame, and drops a stretch that is too short", () => {
+    const meshWindows = [...along(6, 0.2, 6, 1.8), ...along(6, 2.0, 6, 3.8), ...along(0.7, 0, 1, 0)];
+    const spans = meshWindowSpans({ ...room, meshWindows });
+    expect(spans.filter((span) => span.wall === 1)).toHaveLength(1);
+    expect(spans.filter((span) => span.wall === 0)).toHaveLength(0);
+  });
+
+  it("ignores what was seen through the glass, far beyond the wall, and a television's screen", () => {
+    const beyond = along(9, 0.5, 9, 3.5); // a building across the street
+    const tv = along(2, 4, 4, 4); // a screen on the bottom wall
+    const withTv = { ...room, objects: [{ category: "television", center: [3, 3.9] as [number, number], width: 2, depth: 0.1 }] };
+    expect(meshWindowSpans({ ...withTv, meshWindows: [...beyond, ...tv] })).toEqual([]);
+  });
+
+  it("is only a guide: the plan keeps RoomPlan's windows and gets lines for the mesh's", () => {
+    const slot = { canvasWidth: 1000, canvasHeight: 800, imageX: 0, imageY: 0, imageWidth: 1000, imageHeight: 800 };
+    const withMesh = scanToFloorplanDocument({ ...room, meshWindows: along(6, 0.5, 6, 3.5) }, slot, META);
+    const without = scanToFloorplanDocument(room, slot, META);
+    expect(withMesh.objects.filter((object) => object.type === "window")).toHaveLength(1);
+    // The same objects either way (ids are random, so compare by kind).
+    expect(withMesh.objects.map((object) => object.type)).toEqual(without.objects.map((object) => object.type));
+    expect(withMesh.guides?.meshWindows).toHaveLength(1);
+    expect(without.guides).toBeUndefined();
+  });
+
+  it("accepts mesh points and refuses broken ones", () => {
+    expect(parseScanPlan({ ...room, meshWindows: [[1, 2]] }).ok).toBe(true);
+    expect(parseScanPlan({ ...room, meshWindows: [[1, "x"]] }).ok).toBe(false);
   });
 });

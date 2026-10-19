@@ -1,3 +1,4 @@
+import ARKit
 import RoomPlan
 import SwiftUI
 
@@ -5,6 +6,8 @@ import SwiftUI
 /// building up in 3D. Setting `stopRequested` ends the scan; RoomPlan then processes it and
 /// `onFinish` receives the finished room.
 struct RoomCaptureScreen: UIViewRepresentable {
+    /// Our own session, shared with RoomPlan so the LiDAR mesh it builds can be read too.
+    var session: ARSession
     var stopRequested: Bool
     var onFinish: (Result<CapturedRoom, any Error>) -> Void
 
@@ -13,7 +16,7 @@ struct RoomCaptureScreen: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> RoomCaptureView {
-        let view = RoomCaptureView(frame: .zero)
+        let view = RoomCaptureView(frame: .zero, arSession: session)
         view.delegate = context.coordinator
         view.captureSession.run(configuration: RoomCaptureSession.Configuration())
         return view

@@ -47,6 +47,9 @@ nonisolated struct ScanPlan: Codable, Equatable {
     var openings: [Opening]
     var rooms: [Room]
     var objects: [Object]
+    /// The floor of the whole capture, seen from above. LiDAR sees a floor even where a wall is
+    /// glass and was missed, so the web app uses it to put back walls along its edges.
+    var floor: [PlanPoint]? = nil
 
     nonisolated struct Wall: Codable, Equatable {
         var start: PlanPoint
@@ -86,12 +89,15 @@ nonisolated struct MeasuredWall {
     var thickness: Double?
 }
 
-/// A door, window or doorless opening: its middle and its width along the wall.
+/// A door, window or doorless opening: its middle, its width, and the direction it runs.
 nonisolated struct MeasuredOpening {
     enum Kind { case door, window, opening }
     var kind: Kind
     var center: PlanPoint
     var width: Double
+    /// Along the wall it is in. Lets an opening with no wall found around it (a glass front the
+    /// scanner could not see) become a piece of wall of its own instead of being dropped.
+    var direction: PlanPoint? = nil
 }
 
 extension ScanPlan {
@@ -103,9 +109,10 @@ extension ScanPlan {
         walls measuredWalls: [MeasuredWall],
         openings measuredOpenings: [MeasuredOpening],
         rooms: [Room],
-        objects: [Object]
+        objects: [Object],
+        floor: [PlanPoint]? = nil
     ) {
-        let walls = measuredWalls.compactMap { wall -> Wall? in
+        var walls = measuredWalls.compactMap { wall -> Wall? in
             let length = wall.direction.length
             guard length > 0, wall.length > 0.01 else { return nil }
             let unit = wall.direction * (1 / length)
@@ -117,7 +124,13 @@ extension ScanPlan {
         var windows: [Opening] = []
         var openings: [Opening] = []
         for measured in measuredOpenings {
-            guard let placed = Self.place(measured, in: walls) else { continue }
+            var found = Self.place(measured, in: walls)
+            // No wall within reach: the opening's own span is the wall, so it is kept.
+            if found == nil, let wall = Self.wall(around: measured) {
+                walls.append(wall)
+                found = Self.place(measured, in: walls)
+            }
+            guard let placed = found else { continue }
             switch measured.kind {
             case .door: doors.append(placed)
             case .window: windows.append(placed)
@@ -125,7 +138,14 @@ extension ScanPlan {
             }
         }
 
-        self.init(walls: walls, doors: doors, windows: windows, openings: openings, rooms: rooms, objects: objects)
+        self.init(walls: walls, doors: doors, windows: windows, openings: openings, rooms: rooms, objects: objects, floor: floor)
+    }
+
+    /// A piece of wall exactly as long as an opening that has none around it.
+    nonisolated static func wall(around opening: MeasuredOpening) -> Wall? {
+        guard let direction = opening.direction, direction.length > 0, opening.width > 0.05 else { return nil }
+        let half = direction * (opening.width / 2 / direction.length)
+        return Wall(start: opening.center - half, end: opening.center + half, thickness: nil)
     }
 
     /// The wall an opening sits in (the nearest one within tolerance) and where along it.

@@ -59,12 +59,16 @@ nonisolated struct WebAppClient {
 
     /// Sends the scan. With a password it logs in first; without one it relies on the login from
     /// an earlier send, and says `notLoggedIn` when that has run out.
-    func send(scan: Data, email: String, password: String) async throws -> UploadedPlan {
+    func send(scan: Data, roomPlan: Data? = nil, mesh: Data? = nil, email: String, password: String) async throws -> UploadedPlan {
         if !password.isEmpty {
             try await login(email: email, password: password)
         }
-        return try await upload(scan: scan)
+        return try await upload(scan: scan, roomPlan: roomPlan, mesh: mesh)
     }
+
+    /// RoomPlan's own data goes along so a scan that came out wrong can be looked into, unless
+    /// it would push the request past what the server takes.
+    static let maxRoomPlanBytes = 3_000_000
 
     func login(email: String, password: String) async throws {
         let body = try JSONSerialization.data(withJSONObject: [
@@ -81,10 +85,19 @@ nonisolated struct WebAppClient {
         }
     }
 
-    func upload(scan: Data) async throws -> UploadedPlan {
-        // The scan file is already JSON, so it is wrapped rather than decoded and encoded again.
+    func upload(scan: Data, roomPlan: Data? = nil, mesh: Data? = nil) async throws -> UploadedPlan {
+        // Both files are already JSON, so they are wrapped rather than decoded and encoded again.
         var body = Data("{\"scan\":".utf8)
         body.append(scan)
+        if let roomPlan, roomPlan.count <= Self.maxRoomPlanBytes {
+            body.append(Data(",\"roomPlan\":".utf8))
+            body.append(roomPlan)
+        }
+        // The mesh summary only if the whole request still fits.
+        if let mesh, body.count + mesh.count <= Self.maxRoomPlanBytes + 500_000 {
+            body.append(Data(",\"mesh\":".utf8))
+            body.append(mesh)
+        }
         body.append(Data("}".utf8))
 
         let (data, status) = try await post("api/blank-floorplan", body: body)
@@ -105,10 +118,38 @@ nonisolated struct WebAppClient {
         }
     }
 
+    /// Pieces of the 3D mesh stay under what the server takes per request (Vercel's 4.5 MB).
+    static let modelPartBytes = 3_500_000
+
+    /// Sends the whole mesh after its plan, in pieces; the first piece replaces an earlier send.
+    func uploadModel(_ model: Data, planId: Int, partBytes: Int = WebAppClient.modelPartBytes) async throws {
+        let parts = max(1, (model.count + partBytes - 1) / partBytes)
+        for part in 0..<parts {
+            let start = model.startIndex + part * partBytes
+            let piece = model.subdata(in: start..<min(model.endIndex, start + partBytes))
+            var url = baseURL.appending(path: "api/scan-mesh")
+            url.append(queryItems: [
+                URLQueryItem(name: "imageId", value: String(planId)),
+                URLQueryItem(name: "part", value: String(part)),
+                URLQueryItem(name: "parts", value: String(parts)),
+            ])
+            let (data, status) = try await send(url: url, method: "PUT", body: piece, type: "application/octet-stream")
+            switch status {
+            case 200: continue
+            case 401: throw WebAppError.notLoggedIn
+            default: throw WebAppError.server(Self.message(in: data) ?? "Kunde inte skicka 3D-skanningen (\(status)).")
+            }
+        }
+    }
+
     private func post(_ path: String, body: Data) async throws -> (Data, Int) {
-        var request = URLRequest(url: baseURL.appending(path: path))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        try await send(url: baseURL.appending(path: path), method: "POST", body: body, type: "application/json")
+    }
+
+    private func send(url: URL, method: String, body: Data, type: String) async throws -> (Data, Int) {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue(type, forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         do {
             let (data, response) = try await session.data(for: request)

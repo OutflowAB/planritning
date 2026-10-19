@@ -1,9 +1,12 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
+import { draftVersion } from "@/lib/floorplan/preview";
 import { requireRole } from "@/lib/server-auth";
 import {
   BLANK_FLOORPLAN_PREFIX,
   BUCKET_NAME,
+  DOCUMENTS_TABLE,
   GENERATED_PREFIX,
   getAdminSupabase,
   listStorageVersions,
@@ -49,6 +52,23 @@ async function readLabels(
     }
   }
   return labels;
+}
+
+/** When each blank or scanned plan among `rows` was last saved, by id. */
+async function draftSaves(supabase: SupabaseClient, rows: UploadedImageRow[]): Promise<Map<number, string>> {
+  const ids = rows.filter((row) => row.file_path.startsWith(BLANK_FLOORPLAN_PREFIX)).map((row) => row.id);
+  if (ids.length === 0) return new Map();
+  const { data } = await supabase.from(DOCUMENTS_TABLE).select("image_id, updated_at").in("image_id", ids);
+  return new Map((data ?? []).map((saved) => [saved.image_id as number, saved.updated_at as string]));
+}
+
+/**
+ * A blank or scanned plan's page never changes until it is finished, but the plan on it does, so
+ * its picture's version follows its last save. Other images keep their storage version.
+ */
+function versionOf(row: UploadedImageRow, pageVersion: string | null, saves: Map<number, string>): string | null {
+  const saved = saves.get(row.id);
+  return saved ? draftVersion(pageVersion, saved) : pageVersion;
 }
 
 function parseIsoDate(value: string | null): string | null {
@@ -100,7 +120,11 @@ export async function GET(request: Request) {
       .list(folder, { search: typed.file_path.slice(folder.length + 1), limit: 1 });
     const version = normaliseEtag((listed?.[0]?.metadata as { eTag?: unknown } | null)?.eTag);
     const labels = await readLabels(supabase, [typed.id]);
-    const item: ImageListItem = { ...typed, version, label: labels.get(typed.id) ?? null };
+    const item: ImageListItem = {
+      ...typed,
+      version: versionOf(typed, version, await draftSaves(supabase, [typed])),
+      label: labels.get(typed.id) ?? null,
+    };
     return NextResponse.json({ item }, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -166,9 +190,10 @@ export async function GET(request: Request) {
     supabase,
     rows.map((row) => row.id),
   );
+  const saves = await draftSaves(supabase, rows);
   const items: ImageListItem[] = rows.map((row) => ({
     ...row,
-    version: versions.get(row.file_path) ?? null,
+    version: versionOf(row, versions.get(row.file_path) ?? null, saves),
     label: labels.get(row.id) ?? null,
   }));
 

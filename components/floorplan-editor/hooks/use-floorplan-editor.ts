@@ -19,6 +19,7 @@ import {
   attachEraserStrokeMetadata,
   createEraserStrokeFromPath,
   createFabricObjectFromFloorplan,
+  drawGuides,
   duplicateFabricObject,
   floorplanObjectFromFabric,
   getFloorplanMeta,
@@ -47,6 +48,7 @@ import { imageDownloadBaseName } from "@/lib/image-naming";
 import { snapFloorplanObjectPosition } from "@/lib/floorplan/fabric/object-snapping";
 import { formatMeters, lineLengthInMeters } from "@/lib/floorplan/measure";
 import { originalDocument } from "@/lib/floorplan/original-document";
+import { rotatePlanQuarterTurn } from "@/lib/floorplan/rotate-plan";
 import type { EditorTool, FloorplanDocument, FloorplanObject } from "@/lib/floorplan/types";
 import { createObjectId } from "@/lib/floorplan/types";
 import type { Canvas, FabricObject } from "fabric";
@@ -99,6 +101,9 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
   const [canvasReadyVersion, setCanvasReadyVersion] = useState(0);
   /** Ökas vid undo/redo så canvas synkas från dokument utan att varje redigering triggar omritning. */
   const [renderRevision, setRenderRevision] = useState(0);
+  // The blue help lines where the LiDAR mesh saw window; shown unless switched off.
+  const [showGuides, setShowGuides] = useState(true);
+  const showGuidesRef = useRef(true);
   const [zoomLevel, setZoomLevelState] = useState(1);
   const placementStartRef = useRef<{ x: number; y: number } | null>(null);
   const documentRef = useRef<FloorplanDocument | null>(null);
@@ -166,6 +171,7 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
 
     try {
       await renderDocumentToCanvas(canvas, currentDocument, imageUrl);
+      drawGuides(canvas, currentDocument, showGuidesRef.current);
     } catch (error) {
       if (!isCanvasOperational(canvasRef.current)) {
         return;
@@ -683,6 +689,29 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
     }
   }, [approvedImage.file_path, approvedImage.id, document, onError]);
 
+  useEffect(() => {
+    showGuidesRef.current = showGuides;
+    if (canvasRef.current) drawGuides(canvasRef.current, documentRef.current, showGuides);
+  }, [showGuides]);
+
+  /** A quarter turn of the whole plan, refitted to the page: one step to undo. */
+  const rotatePlan = useCallback(() => {
+    const canvas = canvasRef.current;
+    const currentDocument = documentRef.current;
+    if (!canvas || !currentDocument?.drawingArea) {
+      return;
+    }
+
+    const nextDocument = touchDocument(rotatePlanQuarterTurn(syncCanvasToDocument(canvas, currentDocument)));
+    documentRef.current = nextDocument;
+    commitDocument(nextDocument);
+    setSelectedObjectId(null);
+    setRenderRevision((version) => version + 1);
+  }, [commitDocument]);
+
+  // Only blank and scanned plans know their drawing area; an AI-redrawn image cannot turn.
+  const canRotatePlan = Boolean(document?.drawingArea && document.objects.length > 0);
+
   const publishFlattenedImage = useCallback(async () => {
     const canvas = canvasRef.current;
     const currentDocument = documentRef.current;
@@ -891,6 +920,11 @@ export function useFloorplanEditor({ approvedImage, onError }: UseFloorplanEdito
     canUndo: history ? canUndo(history) : false,
     canRedo: history ? canRedo(history) : false,
     canResetToOriginal,
+    rotatePlan,
+    canRotatePlan,
+    hasGuides: Boolean(document?.guides?.meshWindows?.length),
+    showGuides,
+    setShowGuides,
     saveDocument,
     publishFlattenedImage,
     discardDocumentChanges,

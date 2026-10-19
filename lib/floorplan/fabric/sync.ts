@@ -29,6 +29,31 @@ import { CANVA_PURPLE, CANVA_SELECTION_PROPS } from "@/lib/floorplan/fabric/canv
 
 const FLOORPLAN_DATA_KEY = "floorplan";
 const FLOORPLAN_BACKGROUND_KEY = "floorplan-background";
+const FLOORPLAN_GUIDE_KEY = "floorplan-guide";
+
+/** Help lines drawn over the plan in the editor only, never part of the document's objects. */
+export function drawGuides(canvas: Canvas, document: FloorplanDocument | null | undefined, visible: boolean) {
+  if (!isCanvasOperational(canvas)) {
+    return;
+  }
+  for (const old of canvas.getObjects().filter((object) => object.get(FLOORPLAN_GUIDE_KEY))) {
+    canvas.remove(old);
+  }
+  for (const [x1, y1, x2, y2] of visible ? (document?.guides?.meshWindows ?? []) : []) {
+    const line = new Line([x1, y1, x2, y2], {
+      stroke: "#1d9bf0",
+      strokeWidth: 8,
+      strokeDashArray: [14, 10],
+      selectable: false,
+      evented: false,
+      excludeFromExport: true,
+    });
+    line.set(FLOORPLAN_GUIDE_KEY, true);
+    canvas.add(line);
+    canvas.bringObjectToFront(line);
+  }
+  canvas.requestRenderAll();
+}
 
 export function isCanvasOperational(canvas: Canvas | null | undefined): canvas is Canvas {
   return Boolean(canvas && !canvas.disposed && !canvas.destroyed);
@@ -210,7 +235,7 @@ export function sortFloorplanObjectsByLayer(objects: FloorplanObject[]): Floorpl
 export function applyCanvasLayerOrder(canvas: Canvas) {
   const stacked = canvas
     .getObjects()
-    .filter((object) => !object.get(FLOORPLAN_BACKGROUND_KEY));
+    .filter((object) => !object.get(FLOORPLAN_BACKGROUND_KEY) && !object.get(FLOORPLAN_GUIDE_KEY));
 
   const sorted = [...stacked].sort((a, b) => {
     const metaA = getFloorplanMeta(a);
@@ -226,6 +251,8 @@ export function applyCanvasLayerOrder(canvas: Canvas) {
   sorted.forEach((object, index) => {
     canvas.moveObjectTo(object, index + 1);
   });
+  // The guide lines stay on top of everything.
+  canvas.getObjects().filter((object) => object.get(FLOORPLAN_GUIDE_KEY)).forEach((line) => canvas.bringObjectToFront(line));
 }
 
 function createPathGroup(
@@ -695,7 +722,7 @@ export async function renderDocumentToCanvas(
 export function syncCanvasToDocument(canvas: Canvas, document: FloorplanDocument): FloorplanDocument {
   const objects = canvas
     .getObjects()
-    .filter((object) => !object.get(FLOORPLAN_BACKGROUND_KEY))
+    .filter((object) => !object.get(FLOORPLAN_BACKGROUND_KEY) && !object.get(FLOORPLAN_GUIDE_KEY))
     .map((object) => floorplanObjectFromFabric(object))
     .filter((object): object is FloorplanObject => object !== null);
 

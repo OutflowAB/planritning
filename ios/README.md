@@ -29,8 +29,9 @@ RoomPlan fungerar inte i simulatorn.
    står också där). Adress och e-post kommer ihåg; lösenordet behövs bara första gången
    (inloggningen sparas i en vecka), eller när den löpt ut.
    - Adressen utan `http://` tolkas som `https://`.
-4. Alternativ: **Dela som fil** → AirDrop till datorn. Två filer skickas:
-   - `skanning-….json` — importera den i webbappen.
+4. Alternativ: **Dela som fil** → AirDrop till datorn. Filerna som skickas:
+   - `skanning-….json` — importera den i webbappen, tillsammans med `skanning-…-3d.bin`
+     (markera båda i filväljaren) så får planen 3D-skanningen, i verkliga färger.
    - `skanning-…-roomplan.json` — RoomPlans egna rådata, för att kontrollera konverteringen mot
      riktiga skanningar.
 
@@ -62,7 +63,7 @@ swiftc -swift-version 6 -default-isolation MainActor ios/SMSkanner.swiftpm/WebAp
 ```
 
 Den loggar in, skickar en liten skanning och provar felfallen (fel lösenord, ingen inloggning,
-servern nåbar ej, ogiltig skanning). Två planer skapas under Skannare; ta bort dem efteråt.
+servern nåbar ej, ogiltig skanning). Tre planer skapas under Skannare (en med glasvägg och RoomPlan-data); ta bort dem efteråt.
 
 ## Hur det fungerar
 
@@ -74,7 +75,7 @@ servern nåbar ej, ogiltig skanning). Två planer skapas under Skannare; ta bort
   utan Xcode:
 
 ```bash
-swiftc -swift-version 6 ios/SMSkanner.swiftpm/ScanPlan.swift ios/ScanPlanCheck/main.swift -o /tmp/scan-check && /tmp/scan-check
+swiftc -swift-version 6 ios/SMSkanner.swiftpm/ScanPlan.swift ios/SMSkanner.swiftpm/MeshSummary.swift ios/ScanPlanCheck/main.swift -o /tmp/scan-check && /tmp/scan-check
 ```
 
 Formatet beskrivs i `lib/floorplan/scan-import.ts`.

@@ -2,8 +2,9 @@
 
 import dynamic from "next/dynamic";
 import { Loader2 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import { BLANK_FLOORPLAN_PREFIX } from "@/lib/floorplan/image-url";
 import { EditorToolbar } from "@/components/floorplan-editor/editor-toolbar";
 import { EditorTopBar } from "@/components/floorplan-editor/editor-top-bar";
 import { useFloorplanEditor } from "@/components/floorplan-editor/hooks/use-floorplan-editor";
@@ -14,6 +15,12 @@ const EditorCanvas = dynamic(
     ssr: false,
     loading: () => <EditorCanvasLoading />,
   },
+);
+
+// three.js is loaded only when the 3D scan is opened.
+const ScanMeshViewer = dynamic(
+  () => import("@/components/floorplan-editor/scan-mesh-viewer").then((module) => module.ScanMeshViewer),
+  { ssr: false },
 );
 
 type ApprovedImage = {
@@ -56,6 +63,25 @@ export function FloorplanEditor({
 }: FloorplanEditorProps) {
   const [errorMessage, setErrorMessage] = useState("");
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  // The plan whose 3D mesh was found, so a plan switched to does not show the last one's button.
+  const [scanMeshFor, setScanMeshFor] = useState<number | null>(null);
+  const hasScanMesh = scanMeshFor === approvedImage.id;
+  const [showScanMesh, setShowScanMesh] = useState(false);
+
+  // Only scans have a 3D mesh; the button shows once one is found.
+  useEffect(() => {
+    if (!approvedImage.file_path.startsWith(BLANK_FLOORPLAN_PREFIX)) return;
+    let active = true;
+    fetch(`/api/scan-mesh?imageId=${approvedImage.id}`, { cache: "no-store" })
+      .then((response) => {
+        if (active && response.ok) setScanMeshFor(approvedImage.id);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [approvedImage.id, approvedImage.file_path]);
+
   const onError = useCallback((message: string) => {
     setErrorMessage(message);
   }, []);
@@ -117,7 +143,10 @@ export function FloorplanEditor({
         onSaveAndPublish={handleSaveToLibrary}
         onLeave={() => void handleLeave()}
         onResetToOriginal={handleResetToOriginalClick}
+        onShowScanMesh={hasScanMesh ? () => setShowScanMesh(true) : undefined}
       />
+
+      {showScanMesh ? <ScanMeshViewer imageId={approvedImage.id} onClose={() => setShowScanMesh(false)} /> : null}
 
       {showResetConfirm ? (
         <div

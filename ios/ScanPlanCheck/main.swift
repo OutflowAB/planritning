@@ -1,7 +1,7 @@
 import Foundation
 
 // Checks the scan geometry without a phone or Xcode:
-//   swiftc ios/SMSkanner.swiftpm/ScanPlan.swift ios/ScanPlanCheck/main.swift -o /tmp/scan-check && /tmp/scan-check
+//   swiftc ios/SMSkanner.swiftpm/ScanPlan.swift ios/SMSkanner.swiftpm/MeshSummary.swift ios/ScanPlanCheck/main.swift -o /tmp/scan-check && /tmp/scan-check
 
 func check(_ condition: Bool, _ message: String, line: Int = #line) {
     if !condition {
@@ -56,5 +56,30 @@ check(json["version"] as? Int == 1, "version 1")
 let firstWall = (json["walls"] as! [[String: Any]])[0]
 check((firstWall["start"] as? [Double]) == [0, 0] && (firstWall["end"] as? [Double]) == [5, 0], "points encode as [x, y]")
 check((json["openings"] as? [Any])?.count == 1, "openings are exported")
+
+// A glass front: the scanner found a window but no wall around it. The window becomes its own
+// piece of wall instead of being dropped; one with no direction (no idea which way the wall
+// runs) is still dropped.
+let glass = ScanPlan(
+    walls: measuredWalls,
+    openings: [MeasuredOpening(kind: .window, center: PlanPoint(x: 7, y: 2), width: 1.5, direction: PlanPoint(x: 0, y: 1))],
+    rooms: [],
+    objects: [],
+    floor: [PlanPoint(x: 0, y: 0), PlanPoint(x: 7, y: 0), PlanPoint(x: 7, y: 4), PlanPoint(x: 0, y: 4)]
+)
+check(glass.walls.count == 5, "a wall is made for the window that had none")
+check(glass.walls[4].start == PlanPoint(x: 7, y: 1.25) && glass.walls[4].end == PlanPoint(x: 7, y: 2.75), "the new wall is the window's span")
+check(glass.windows.count == 1 && glass.windows[0].wall == 4 && near(glass.windows[0].offset, 0) && near(glass.windows[0].width, 1.5), "the window sits in it")
+let glassJSON = try JSONSerialization.jsonObject(with: try glass.jsonData()) as! [String: Any]
+check((glassJSON["floor"] as? [[Double]])?.count == 4, "the floor outline is exported")
+check(json["floor"] == nil, "no floor key when there is no floor")
+
+// The mesh summary (prototype): thinned evenly to the cap, and encoded as the server expects.
+let many = (0..<50).map { [Double($0), 1, 0] }
+check(MeshSummary.thinned(many, to: 10).count == 10 && MeshSummary.thinned(many, to: 10)[1] == [5, 1, 0], "points thinned evenly")
+check(MeshSummary.thinned(many, to: 100).count == 50, "a small list is kept whole")
+let summary = MeshSummary(meshAvailable: true, classified: true, faceCounts: ["window": 2, "wall": 9], windowPoints: [[1, 1.2, 3]])
+let summaryJSON = try JSONSerialization.jsonObject(with: try summary.jsonData()) as! [String: Any]
+check(summaryJSON["meshAvailable"] as? Bool == true && (summaryJSON["faceCounts"] as? [String: Int])?["window"] == 2, "summary encodes its counts")
 
 print("ScanPlan geometry: all checks passed")

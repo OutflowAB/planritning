@@ -160,6 +160,11 @@ export type FloorplanDocument = {
   scale?: FloorplanScale;
   drawingArea?: FloorplanDrawingArea;
   objects: FloorplanObject[];
+  /**
+   * Help lines for the person editing, in canvas pixels [x1, y1, x2, y2]. Drawn in the editor
+   * only: never saved as objects, exported or published.
+   */
+  guides?: { meshWindows?: Array<[number, number, number, number]> };
 };
 
 export type EditorTool =

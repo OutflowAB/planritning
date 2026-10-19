@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Check, Minus, Plus, Redo2, RotateCcw, Undo2 } from "lucide-react";
+import { ArrowLeft, Box, Check, Eye, EyeOff, Minus, Plus, Redo2, RotateCcw, RotateCw, Undo2 } from "lucide-react";
 
 import {
   FLOORPLAN_MAX_ZOOM,
@@ -14,6 +14,8 @@ type EditorTopBarProps = {
   onSaveAndPublish?: () => Promise<void>;
   onLeave?: () => void;
   onResetToOriginal?: () => void;
+  /** Opens the scan's 3D mesh; left out when the plan has none. */
+  onShowScanMesh?: () => void;
   isPublishing?: boolean;
   isLeaving?: boolean;
   isLoading?: boolean;
@@ -25,6 +27,7 @@ export function EditorTopBar({
   onSaveAndPublish,
   onLeave,
   onResetToOriginal,
+  onShowScanMesh,
   isPublishing = false,
   isLeaving = false,
   isLoading = false,
@@ -75,6 +78,39 @@ export function EditorTopBar({
             >
               <RotateCcw size={14} aria-hidden="true" />
               Original
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={controller.rotatePlan}
+            disabled={!controller.canRotatePlan || isLoading}
+            title="Vrid planritningen ett kvarts varv medurs"
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-stone-200 bg-white px-2 text-xs font-semibold text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RotateCw size={14} aria-hidden="true" />
+            Rotera
+          </button>
+          {controller.hasGuides ? (
+            <button
+              type="button"
+              onClick={() => controller.setShowGuides(!controller.showGuides)}
+              aria-pressed={controller.showGuides}
+              title="Blå streck visar var LiDAR-skanningen såg fönster. De är bara en hjälp och sparas inte i planen."
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-stone-200 bg-white px-2 text-xs font-semibold text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {controller.showGuides ? <Eye size={14} aria-hidden="true" /> : <EyeOff size={14} aria-hidden="true" />}
+              LiDAR-fönster
+            </button>
+          ) : null}
+          {onShowScanMesh ? (
+            <button
+              type="button"
+              onClick={onShowScanMesh}
+              title="Visa hela LiDAR-skanningen i 3D, för att kontrollera planen"
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-stone-200 bg-white px-2 text-xs font-semibold text-stone-800 transition hover:bg-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Box size={14} aria-hidden="true" />
+              3D-skanning
             </button>
           ) : null}
         </div>

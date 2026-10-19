@@ -26,6 +26,17 @@ export type ScanPlan = {
   openings?: ScanOpening[];
   rooms?: ScanRoom[];
   objects?: ScanObject[];
+  /**
+   * The floor of the whole capture, seen from above. LiDAR sees a floor even where a wall is
+   * glass and was not found, so walls missing along its edges are put back (fillWallsFromFloor).
+   */
+  floor?: Point[];
+  /**
+   * Where the phone's LiDAR mesh labelled surfaces as window, seen from above (metres, same
+   * coordinates as the walls). Only a guide for the person editing the plan: the mesh sees glass
+   * of any shape, but is not reliable enough to draw windows from.
+   */
+  meshWindows?: Point[];
 };
 
 export type ScanWall = { start: Point; end: Point; thickness?: number };
@@ -75,6 +86,8 @@ export type DrawingSlot = {
 };
 
 const MAX_ITEMS = 1000;
+// The phone sends at most 20 000 window points from the mesh.
+const MAX_MESH_POINTS = 20_000;
 const DEFAULT_WALL_THICKNESS = 0.15;
 // Room for the plan to breathe inside the slot.
 const SLOT_FILL = 0.9;
@@ -228,7 +241,160 @@ export function parseScanPlan(input: unknown): ParseScanResult {
     });
   }
 
-  return { ok: true, scan: { version: 1, walls, doors, windows, openings, rooms, objects } };
+  const floor = raw.floor;
+  if (
+    floor !== undefined &&
+    (!Array.isArray(floor) || floor.length < 3 || floor.length > MAX_ITEMS || !floor.every(isPoint))
+  ) {
+    return { ok: false, message: "Golvytan i skanningen är ogiltig." };
+  }
+
+  const meshWindows = raw.meshWindows;
+  if (meshWindows !== undefined && (!Array.isArray(meshWindows) || meshWindows.length > MAX_MESH_POINTS || !meshWindows.every(isPoint))) {
+    return { ok: false, message: "Fönsterpunkterna i skanningen är ogiltiga." };
+  }
+
+  return {
+    ok: true,
+    scan: {
+      version: 1,
+      walls,
+      doors,
+      windows,
+      openings,
+      rooms,
+      objects,
+      floor: floor as Point[] | undefined,
+      meshWindows: meshWindows as Point[] | undefined,
+    },
+  };
+}
+
+// A wall this close to a floor edge (metres) stands on it; gaps shorter than this are corners.
+const FLOOR_WALL_REACH = 0.35;
+const FLOOR_GAP_MIN = 0.5;
+const FLOOR_PARALLEL_DEGREES = 10;
+
+/**
+ * Puts back walls the scanner missed along the edges of the floor. A glass front (or a window
+ * wall with blinds) gives LiDAR almost nothing to measure, so RoomPlan finds no wall there, but
+ * it still finds the floor that ends at it. Every stretch of a floor edge at least half a metre
+ * long with no wall standing on it becomes a wall. The floor is the whole capture's outline, so
+ * passages between rooms are inside it and are not closed off.
+ */
+export function fillWallsFromFloor(scan: ScanPlan): ScanPlan {
+  const floor = scan.floor ?? (scan.rooms?.length === 1 ? scan.rooms[0].outline : undefined);
+  if (!floor || floor.length < 3) return scan;
+
+  const parallel = Math.cos((FLOOR_PARALLEL_DEGREES * Math.PI) / 180);
+  const added: ScanWall[] = [];
+  floor.forEach((a, index) => {
+    const b = floor[(index + 1) % floor.length];
+    const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (length < FLOOR_GAP_MIN) return;
+    const [ux, uy] = [(b[0] - a[0]) / length, (b[1] - a[1]) / length];
+    const offEdge = ([x, y]: Point) => Math.abs((x - a[0]) * uy - (y - a[1]) * ux);
+    const along = ([x, y]: Point) => (x - a[0]) * ux + (y - a[1]) * uy;
+
+    // Where along this edge a wall already stands.
+    const covered: Array<[number, number]> = [];
+    for (const wall of scan.walls) {
+      const wallLong = wallLength(wall);
+      if (wallLong < 0.01) continue;
+      const cos = Math.abs(((wall.end[0] - wall.start[0]) * ux + (wall.end[1] - wall.start[1]) * uy) / wallLong);
+      if (cos < parallel || offEdge(wall.start) > FLOOR_WALL_REACH || offEdge(wall.end) > FLOOR_WALL_REACH) continue;
+      const [t0, t1] = [along(wall.start), along(wall.end)].sort((p, q) => p - q);
+      const [from, to] = [Math.max(0, t0), Math.min(length, t1)];
+      if (to > from) covered.push([from, to]);
+    }
+    covered.sort((p, q) => p[0] - q[0]);
+
+    const gaps: Array<[number, number]> = [];
+    let cursor = 0;
+    for (const [from, to] of covered) {
+      if (from - cursor >= FLOOR_GAP_MIN) gaps.push([cursor, from]);
+      cursor = Math.max(cursor, to);
+    }
+    if (length - cursor >= FLOOR_GAP_MIN) gaps.push([cursor, length]);
+
+    for (const [from, to] of gaps) {
+      added.push({
+        start: [a[0] + ux * from, a[1] + uy * from],
+        end: [a[0] + ux * to, a[1] + uy * to],
+      });
+    }
+  });
+
+  // Appended, so the doors and windows keep pointing at the walls they were in.
+  return added.length > 0 ? { ...scan, walls: [...scan.walls, ...added] } : scan;
+}
+
+// Mesh points this close to a wall's line (metres) are in it; farther ones are what was seen
+// through the glass. Runs of window shorter than this are left out; gaps this short are joined.
+const MESH_WALL_REACH = 0.3;
+const MESH_BIN = 0.1;
+const MESH_MIN_WINDOW = 0.5;
+const MESH_GAP = 0.3;
+// A bin is window when it holds this share of the typical (median) busy bin on its wall.
+const MESH_DENSITY = 0.25;
+
+/**
+ * Where along each wall the phone's LiDAR mesh saw window (metres from the wall's start). Each
+ * wall collects the window-labelled points that lie in it, and stretches where they cluster are
+ * returned. Points in front of a television are left out, since a screen can look like glass to
+ * the mesh.
+ */
+export function meshWindowSpans(scan: ScanPlan): Array<{ wall: number; from: number; to: number }> {
+  const points = scan.meshWindows;
+  if (!points || points.length === 0) return [];
+
+  const screens = (scan.objects ?? []).filter((object) => object.category === "television");
+  const onScreen = ([x, y]: Point) =>
+    screens.some((screen) => Math.hypot(x - screen.center[0], y - screen.center[1]) <= screen.width / 2 + 0.2);
+  const usable = points.filter((point) => !onScreen(point));
+  // Each point counts for the one wall it is nearest to, so glass in a corner is not counted twice.
+  const distance = (point: Point, wall: ScanWall) => {
+    const length = wallLength(wall) || 1;
+    const [ux, uy] = [(wall.end[0] - wall.start[0]) / length, (wall.end[1] - wall.start[1]) / length];
+    const along = Math.max(0, Math.min(length, (point[0] - wall.start[0]) * ux + (point[1] - wall.start[1]) * uy));
+    return Math.hypot(wall.start[0] + ux * along - point[0], wall.start[1] + uy * along - point[1]);
+  };
+  const nearest = usable.map((point) =>
+    scan.walls.reduce((best, wall, index) => (distance(point, wall) < distance(point, scan.walls[best]) ? index : best), 0),
+  );
+
+  const spans: Array<{ wall: number; from: number; to: number }> = [];
+  scan.walls.forEach((wall, index) => {
+    const length = wallLength(wall);
+    if (length < MESH_MIN_WINDOW) return;
+    const [ux, uy] = [(wall.end[0] - wall.start[0]) / length, (wall.end[1] - wall.start[1]) / length];
+
+    const bins = new Array<number>(Math.ceil(length / MESH_BIN)).fill(0);
+    for (const [pointIndex, [x, y]] of usable.entries()) {
+      if (nearest[pointIndex] !== index) continue;
+      const along = (x - wall.start[0]) * ux + (y - wall.start[1]) * uy;
+      const off = Math.abs((x - wall.start[0]) * uy - (y - wall.start[1]) * ux);
+      if (off <= MESH_WALL_REACH && along >= 0 && along < length) bins[Math.floor(along / MESH_BIN)]++;
+    }
+    const busy = bins.filter((count) => count > 0).sort((a, b) => a - b);
+    if (busy.length === 0) return;
+    const level = Math.max(2, MESH_DENSITY * busy[Math.floor(busy.length / 2)]);
+
+    // Runs of window bins, short gaps (a mullion) joined.
+    const runs: Array<[number, number]> = [];
+    bins.forEach((count, bin) => {
+      if (count < level) return;
+      const [from, to] = [bin * MESH_BIN, Math.min(length, (bin + 1) * MESH_BIN)];
+      const last = runs.at(-1);
+      if (last && from - last[1] <= MESH_GAP) last[1] = to;
+      else runs.push([from, to]);
+    });
+    for (const [from, to] of runs) {
+      if (to - from >= MESH_MIN_WINDOW) spans.push({ wall: index, from, to });
+    }
+  });
+
+  return spans;
 }
 
 /** Merged, clamped [from, to] intervals along a wall where it has openings. */
@@ -289,6 +455,7 @@ export function alignToWalls(scan: ScanPlan): ScanPlan {
       center: rotate(object.center),
       rotation: (object.rotation ?? 0) + turnDegrees,
     })),
+    meshWindows: scan.meshWindows?.map(rotate),
   };
 }
 
@@ -589,7 +756,7 @@ export function scanToFloorplanDocument(
   slot: DrawingSlot,
   meta: FloorplanDocumentMeta,
 ): FloorplanDocument {
-  const scan = cleanUpWalls(alignToWalls(input));
+  const scan = cleanUpWalls(alignToWalls(fillWallsFromFloor(input)));
   // Fitted by the walls and every door's swing on both sides of its wall, so a door opening
   // outward (or flipped later) stays on the page.
   const swings = (scan.doors ?? []).flatMap((door) => {
@@ -773,6 +940,17 @@ export function scanToFloorplanDocument(
     });
   }
 
+  // Where the mesh saw window, as a guide for checking the plan; the plan itself has only what
+  // RoomPlan found.
+  const meshWindows = meshWindowSpans(scan).map(({ wall: index, from, to }): [number, number, number, number] => {
+    const wall = scan.walls[index];
+    const length = wallLength(wall);
+    const [ux, uy] = [(wall.end[0] - wall.start[0]) / length, (wall.end[1] - wall.start[1]) / length];
+    const [x1, y1] = toCanvas([wall.start[0] + ux * from, wall.start[1] + uy * from]);
+    const [x2, y2] = toCanvas([wall.start[0] + ux * to, wall.start[1] + uy * to]);
+    return [x1, y1, x2, y2];
+  });
+
   return {
     version: FLOORPLAN_DOCUMENT_VERSION,
     canvas: { width: slot.canvasWidth, height: slot.canvasHeight },
@@ -780,5 +958,6 @@ export function scanToFloorplanDocument(
     scale: { pxPerMeter },
     drawingArea: { x: slot.imageX, y: slot.imageY, width: slot.imageWidth, height: slot.imageHeight },
     objects,
+    ...(meshWindows.length > 0 ? { guides: { meshWindows } } : {}),
   };
 }

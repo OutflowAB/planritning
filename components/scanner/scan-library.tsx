@@ -21,6 +21,8 @@ import { buildVerktygHref, setPendingVerktygSave } from "@/lib/verktyg-save-sess
 const SCAN_LIST_CACHE_KEY = "scan-list-cache-v1";
 // The server refuses more; a real scan is a few kilobytes.
 const MAX_SCAN_FILE_BYTES = 2_000_000;
+// A piece of a 3D mesh stays under the server's 4 MB request cap.
+const MESH_PART_BYTES = 3_500_000;
 
 async function fetchScans(signal: AbortSignal): Promise<ImageListItem[]> {
   const { items } = await apiJson<{ items: ImageListItem[] }>("/api/images?kind=scans", { signal });
@@ -69,8 +71,8 @@ export function ScanLibrary() {
     router.push(buildVerktygHref(pathname, payload));
   }
 
-  /** Starts an empty plan, or one drawn from `scan` (validated on the server). */
-  async function createPlan(scan?: unknown) {
+  /** Starts an empty plan, or one drawn from `scan` (validated on the server), with its 3D mesh if given. */
+  async function createPlan(scan?: unknown, model?: File) {
     if (isCreating) {
       return;
     }
@@ -88,6 +90,16 @@ export function ScanLibrary() {
               body: JSON.stringify({ scan }),
             },
       );
+      if (model) {
+        // In pieces, as from the phone, to stay under the server's request limit.
+        const parts = Math.max(1, Math.ceil(model.size / MESH_PART_BYTES));
+        for (let part = 0; part < parts; part++) {
+          await apiFetch(`/api/scan-mesh?imageId=${image.id}&part=${part}&parts=${parts}`, {
+            method: "PUT",
+            body: model.slice(part * MESH_PART_BYTES, (part + 1) * MESH_PART_BYTES),
+          });
+        }
+      }
       dispatchLibraryUpdated();
       openInVerktyg({ imageId: image.id, imagePath: image.file_path });
     } catch (createError) {
@@ -98,8 +110,12 @@ export function ScanLibrary() {
     }
   }
 
-  async function importScanFile(file: File | undefined) {
+  /** The scan file and, if picked with it, the 3D mesh (`-3d.bin`); RoomPlan's raw data and the mesh summary are not needed. */
+  async function importScanFiles(files: File[]) {
+    const file = files.find((candidate) => candidate.name.endsWith(".json") && !/-(roomplan|mesh)\.json$/.test(candidate.name));
+    const model = files.find((candidate) => candidate.name.endsWith(".bin"));
     if (!file) {
+      setActionError("Välj skanningsfilen (den som inte slutar på -roomplan eller -mesh).");
       return;
     }
     if (file.size > MAX_SCAN_FILE_BYTES) {
@@ -117,7 +133,7 @@ export function ScanLibrary() {
     // A wrapped file ({ "scan": … }) is accepted as well as the bare scan.
     const unwrapped =
       scan && typeof scan === "object" && "scan" in scan ? (scan as { scan: unknown }).scan : scan;
-    await createPlan(unwrapped);
+    await createPlan(unwrapped, model);
   }
 
   async function openScan(scan: ImageListItem) {
@@ -203,12 +219,13 @@ export function ScanLibrary() {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".json,application/json"
+        accept=".json,.bin,application/json"
+        multiple
         className="hidden"
         onChange={(event) => {
-          const file = event.target.files?.[0];
+          const files = Array.from(event.target.files ?? []);
           event.target.value = "";
-          void importScanFile(file);
+          if (files.length > 0) void importScanFiles(files);
         }}
       />
 
