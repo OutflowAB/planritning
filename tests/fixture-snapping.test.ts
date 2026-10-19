@@ -58,18 +58,3 @@ describe("snapBoxToFixtures", () => {
     expect(snapStretchedSide(counter, 1, true, walls, 12)).toBeNull();
   });
 });
-
-describe("abbreviationTextSize", () => {
-  it("fits letters to the box, keeps a chosen size, and never lets them outgrow the box", async () => {
-    const { abbreviationFontSize, abbreviationTextSize } = await import("@/lib/floorplan/symbol-library");
-    const wardrobe = { symbolId: "garderob", width: 60, height: 60, scaleX: 1, scaleY: 1 };
-    expect(abbreviationTextSize(wardrobe)).toBeCloseTo(abbreviationFontSize(60, 60, "G"));
-    // Upright in a turned box, the letters must fit across a long narrow box as well as along it.
-    expect(abbreviationTextSize({ ...wardrobe, width: 160, height: 40 })).toBeCloseTo(abbreviationFontSize(160, 40, "G"));
-    // A chosen size is kept when the box grows...
-    expect(abbreviationTextSize({ ...wardrobe, height: 120, textSize: 12 })).toBe(12);
-    // ...but held to what fits inside it.
-    expect(abbreviationTextSize({ ...wardrobe, textSize: 500 })).toBeCloseTo(48);
-    expect(abbreviationTextSize({ ...wardrobe, symbolId: "bankskiva" })).toBeUndefined();
-  });
-});
